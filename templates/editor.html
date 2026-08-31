@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit {{ deck.title }} · Slides</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/htmx.min.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/admin">Slides</a>
+    <div>
+      <span class="status-pill">{{ published_versions }} published</span>
+      {% match active_code %}
+        {% when Some with (code) %}<a class="button secondary small" href="/present/{{ code }}">Return to live session</a>
+        {% when None %}
+          {% if published_versions > 0 %}<form method="post" action="/admin/decks/{{ deck.slug }}/sessions" style="display:inline"><button class="secondary small" type="submit">Start presenting</button></form>{% endif %}
+      {% endmatch %}
+    </div>
+  </header>
+  <main class="shell" style="width:min(100% - 1rem, 100rem)">
+    <div id="notice" role="status" aria-live="polite"></div>
+    <div class="editor-layout">
+      <section class="editor-pane">
+        <form id="deck-form" method="post" action="/admin/decks/{{ deck.slug }}/save">
+          <label>Title <input name="title" value="{{ deck.title }}" required maxlength="120"></label>
+          <label>Markdown
+            <textarea name="source" required spellcheck="true">{{ deck.draft_source }}</textarea>
+          </label>
+          <details>
+            <summary>Theme and display</summary>
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;margin-top:1rem">
+              <label>Font
+                <select name="font">
+                  <option value="system"{% if deck.theme_font == "system" %} selected{% endif %}>System sans</option>
+                  <option value="serif"{% if deck.theme_font == "serif" %} selected{% endif %}>Serif</option>
+                  <option value="mono"{% if deck.theme_font == "mono" %} selected{% endif %}>Monospace</option>
+                </select>
+              </label>
+              <label>Background <input type="color" name="background" value="{{ deck.theme_background }}"></label>
+              <label>Text <input type="color" name="text" value="{{ deck.theme_text }}"></label>
+              <label>Accent <input type="color" name="accent" value="{{ deck.theme_accent }}"></label>
+            </div>
+            <label style="display:flex;grid-template-columns:auto 1fr;align-items:center;margin-top:1rem"><input style="width:auto" type="checkbox" name="show_join_code" value="yes"{% if deck.show_join_code %} checked{% endif %}> Show the join code on slides</label>
+          </details>
+          <div style="display:flex;flex-wrap:wrap;gap:.6rem">
+            <button type="button" hx-post="/admin/decks/{{ deck.slug }}/preview" hx-include="#deck-form" hx-target="#preview" hx-swap="innerHTML">Preview unsaved changes</button>
+            <button class="secondary" type="button" hx-post="/admin/decks/{{ deck.slug }}/save" hx-include="#deck-form" hx-target="#notice">Save draft</button>
+            <button class="ghost" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice">Publish version</button>
+          </div>
+        </form>
+        <details style="margin-top:1rem">
+          <summary>Interactive Markdown examples</summary>
+          <pre><code>:::poll question=&quot;Which do you prefer?&quot; multiple orientation=&quot;horizontal&quot;
+- Rust
+- Go
+:::
+
+:::wordcloud prompt=&quot;Describe Rust in one word&quot; max=&quot;80&quot;
+:::
+
+:::quiz question=&quot;Which type owns its contents?&quot;
+- [x] String
+- [ ] &amp;str
+:::</code></pre>
+        </details>
+      </section>
+      <section id="preview" class="preview-pane" aria-live="polite">{{ initial_preview|safe }}</section>
+    </div>
+  </main>
+</body>
+</html>

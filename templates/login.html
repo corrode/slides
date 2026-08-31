@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Presenter sign in · Slides</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/">Slides</a></header>
+  <main class="shell">
+    <section class="panel" style="max-width:30rem;margin:8vh auto 0">
+      <h1>Presenter sign in</h1>
+      <p>Use the password configured for this installation.</p>
+      {% match error %}{% when Some with (message) %}<div class="notice error" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
+      <form method="post" action="/admin/login">
+        <label>Password <input type="password" name="password" required autofocus autocomplete="current-password"></label>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

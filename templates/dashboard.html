@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your presentations · Slides</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/htmx.min.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/admin">Slides</a><a class="button ghost small" href="/">Audience landing page</a></header>
+  <main class="shell">
+    <div class="landing-grid">
+      <section>
+        <h1>Your presentations</h1>
+        {% if decks.is_empty() %}<div class="empty-state">Create your first deck to get started.</div>{% else %}
+        <ul class="deck-list">
+          {% for deck in decks %}
+          <li class="deck-card">
+            <h2>{{ deck.title }}</h2>
+            <p>/{{ deck.slug }} · {{ deck.published_versions }} published</p>
+            {% match deck.active_code %}
+              {% when Some with (code) %}<span class="status-pill live">Live · {{ code }}</span>
+              {% when None %}<span class="status-pill">Draft</span>
+            {% endmatch %}
+            <a class="button secondary small" href="/admin/decks/{{ deck.slug }}/edit">Open editor</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </section>
+      <section class="panel">
+        <h2>New presentation</h2>
+        <div id="create-error" role="alert"></div>
+        <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error">
+          <label>Title <input name="title" placeholder="Rust without the guesswork" required maxlength="120"></label>
+          <label>Shortlink <input name="slug" placeholder="rust-errors" pattern="[a-z0-9][a-z0-9-]{1,46}[a-z0-9]" required maxlength="48"></label>
+          <button type="submit">Create deck</button>
+        </form>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

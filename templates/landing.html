@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join a presentation · Slides</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Slides</a>
+    <a class="button ghost small" href="/admin">Presenter</a>
+  </header>
+  <main class="shell">
+    <div class="landing-grid" style="align-items:center;min-height:70vh">
+      <section>
+        <p class="status-pill live">Interactive presentations</p>
+        <h1>Join the room.</h1>
+        <p style="max-width:38rem;color:var(--text-soft);font-size:1.15rem">Follow along, answer questions, and react from any browser.</p>
+      </section>
+      <section class="panel">
+        <h2>Enter the presentation code</h2>
+        <form method="post" action="/join">
+          <label>Six-digit code
+            <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="482731" required autofocus autocomplete="one-time-code">
+          </label>
+          <button type="submit">Join presentation</button>
+        </form>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

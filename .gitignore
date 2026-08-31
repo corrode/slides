@@ -1,0 +1,6 @@
+/target
+/slides.db
+/slides.db-shm
+/slides.db-wal
+/.env
+/.DS_Store

@@ -1,0 +1,333 @@
+use askama::Template;
+use axum::{
+    Form,
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
+};
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use serde::Deserialize;
+
+use crate::{
+    error::{AppError, AppResult},
+    markdown::parse_deck,
+    models::{Deck, DeckSummary, Theme},
+    store,
+    web::{AppState, is_admin, require_admin, template},
+};
+
+use super::render;
+
+#[derive(Template)]
+#[template(path = "login.html")]
+struct LoginTemplate {
+    error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "dashboard.html")]
+struct DashboardTemplate {
+    decks: Vec<DeckSummary>,
+}
+
+#[derive(Template)]
+#[template(path = "editor.html")]
+struct EditorTemplate {
+    deck: Deck,
+    published_versions: i64,
+    active_code: Option<String>,
+    initial_preview: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginForm {
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewDeckForm {
+    title: String,
+    slug: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeckForm {
+    title: String,
+    source: String,
+    font: String,
+    background: String,
+    text: String,
+    accent: String,
+    show_join_code: Option<String>,
+}
+
+pub async fn login_page(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
+    if is_admin(&jar, &state) {
+        return Ok(Redirect::to("/admin").into_response());
+    }
+    template(LoginTemplate { error: None })
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(form): Form<LoginForm>,
+) -> AppResult<Response> {
+    if !super::secrets_equal(&super::hash(&form.password), &state.admin_password_hash) {
+        return template(LoginTemplate {
+            error: Some("That password is not correct.".into()),
+        });
+    }
+
+    let cookie = Cookie::build(("slides_admin", state.admin_cookie.clone()))
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .secure(state.secure_cookies)
+        .build();
+    Ok((jar.add(cookie), Redirect::to("/admin")).into_response())
+}
+
+pub async fn dashboard(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
+    if !is_admin(&jar, &state) {
+        return Ok(Redirect::to("/admin/login").into_response());
+    }
+    template(DashboardTemplate {
+        decks: store::list_decks(&state.pool).await?,
+    })
+}
+
+pub async fn create_deck(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Form(form): Form<NewDeckForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let title = form.title.trim();
+    let slug = form.slug.trim().to_ascii_lowercase();
+    validate_title(title)?;
+    validate_slug(&slug)?;
+    let deck = store::create_deck(&state.pool, &slug, title)
+        .await
+        .map_err(|error| {
+            if error.to_string().contains("UNIQUE constraint failed") {
+                AppError::bad_request("That shortlink is already in use.")
+            } else {
+                error.into()
+            }
+        })?;
+    let location = format!("/admin/decks/{}/edit", deck.slug);
+    if headers.contains_key("hx-request") {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        response.headers_mut().insert(
+            "hx-redirect",
+            HeaderValue::from_str(&location).expect("deck edit path is a valid header value"),
+        );
+        Ok(response)
+    } else {
+        Ok(Redirect::to(&location).into_response())
+    }
+}
+
+pub async fn editor(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+) -> AppResult<Response> {
+    if !is_admin(&jar, &state) {
+        return Ok(Redirect::to("/admin/login").into_response());
+    }
+    let deck = required_deck(&state, &slug).await?;
+    let published_versions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM deck_versions WHERE deck_id = ?")
+            .bind(deck.id)
+            .fetch_one(&state.pool)
+            .await?;
+    let active_code = store::active_session_for_deck(&state.pool, deck.id)
+        .await?
+        .map(|session| session.code);
+    let document = parse_deck(&deck.draft_source)?;
+    let initial_preview = render::preview(&document, &Theme::from(&deck), deck.show_join_code);
+    template(EditorTemplate {
+        deck,
+        published_versions,
+        active_code,
+        initial_preview,
+    })
+}
+
+pub async fn preview(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+    Form(form): Form<DeckForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let _ = required_deck(&state, &slug).await?;
+    validate_deck_form(&form)?;
+    let document =
+        parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let theme = theme_from_form(&form);
+    Ok(Html(render::preview(
+        &document,
+        &theme,
+        form.show_join_code.is_some(),
+    ))
+    .into_response())
+}
+
+pub async fn save(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+    Form(form): Form<DeckForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let deck = required_deck(&state, &slug).await?;
+    save_form(&state, deck.id, &form).await?;
+    Ok(Html(
+        "<div class=\"notice\">Draft saved. Your published version is unchanged.</div>".to_owned(),
+    )
+    .into_response())
+}
+
+pub async fn publish(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<DeckForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let deck = required_deck(&state, &slug).await?;
+    validate_deck_form(&form)?;
+    parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    store::save_and_publish_deck(
+        &state.pool,
+        deck.id,
+        form.title.trim(),
+        &form.source,
+        &form.font,
+        &form.background,
+        &form.text,
+        &form.accent,
+        form.show_join_code.is_some(),
+    )
+    .await?;
+    if headers.contains_key("hx-request") {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        response
+            .headers_mut()
+            .insert("hx-refresh", HeaderValue::from_static("true"));
+        Ok(response)
+    } else {
+        Ok(Redirect::to(&format!("/admin/decks/{slug}/edit")).into_response())
+    }
+}
+
+pub async fn start_session(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let deck = required_deck(&state, &slug).await?;
+    if let Some(session) = store::active_session_for_deck(&state.pool, deck.id).await? {
+        return Ok(Redirect::to(&format!("/present/{}", session.code)).into_response());
+    }
+    let version = store::latest_version(&state.pool, deck.id)
+        .await?
+        .ok_or_else(|| AppError::bad_request("Publish the deck before presenting it."))?;
+    let document =
+        parse_deck(&version.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    if document.slides.is_empty() {
+        return Err(AppError::bad_request("The published deck has no slides."));
+    }
+    let session = store::start_session(&state.pool, deck.id, version.id).await?;
+    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
+}
+
+async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<()> {
+    validate_deck_form(form)?;
+    parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    store::save_deck(
+        &state.pool,
+        deck_id,
+        form.title.trim(),
+        &form.source,
+        &form.font,
+        &form.background,
+        &form.text,
+        &form.accent,
+        form.show_join_code.is_some(),
+    )
+    .await?;
+    Ok(())
+}
+
+fn validate_deck_form(form: &DeckForm) -> AppResult<()> {
+    validate_title(form.title.trim())?;
+    if form.source.trim().is_empty() {
+        return Err(AppError::bad_request("The deck cannot be empty."));
+    }
+    if !matches!(form.font.as_str(), "system" | "serif" | "mono") {
+        return Err(AppError::bad_request("Unsupported font choice."));
+    }
+    for color in [&form.background, &form.text, &form.accent] {
+        if !valid_color(color) {
+            return Err(AppError::bad_request(
+                "Theme colors must use #RRGGBB format.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn theme_from_form(form: &DeckForm) -> Theme {
+    Theme {
+        font: form.font.clone(),
+        background: form.background.clone(),
+        text: form.text.clone(),
+        accent: form.accent.clone(),
+    }
+}
+
+fn valid_color(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_title(title: &str) -> AppResult<()> {
+    if title.is_empty() || title.chars().count() > 120 {
+        return Err(AppError::bad_request(
+            "Titles must contain between 1 and 120 characters.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_slug(slug: &str) -> AppResult<()> {
+    const RESERVED: &[&str] = &["admin", "assets", "join", "present", "sessions"];
+    let valid = (3..=48).contains(&slug.len())
+        && !slug.bytes().all(|byte| byte.is_ascii_digit())
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && !RESERVED.contains(&slug);
+    if !valid {
+        return Err(AppError::bad_request(
+            "Shortlinks must be 3–48 lowercase letters, numbers, or hyphens and cannot be all numeric.",
+        ));
+    }
+    Ok(())
+}
+
+async fn required_deck(state: &AppState, slug: &str) -> AppResult<Deck> {
+    store::deck_by_slug(&state.pool, slug)
+        .await?
+        .ok_or_else(|| AppError::not_found("Presentation not found."))
+}
