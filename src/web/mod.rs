@@ -50,6 +50,9 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{code}/events", get(session::events))
         .route("/sessions/{code}/previous", post(session::previous))
         .route("/sessions/{code}/next", post(session::next))
+        .route("/sessions/{code}/attention", post(session::focus_audience))
+        .route("/sessions/{code}/hand", post(session::toggle_hand))
+        .route("/sessions/{code}/hands/reset", post(session::reset_hands))
         .route("/sessions/{code}/lock", post(session::toggle_lock))
         .route(
             "/sessions/{code}/interaction",

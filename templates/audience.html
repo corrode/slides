@@ -11,6 +11,7 @@
 </head>
 <body style="{{ theme_style }}">
   <div hx-sse:connect="{{ events_url }}" hx-target="#live-view" hx-swap="outerMorph"></div>
+  <div id="reaction-feed" class="reaction-feed" aria-hidden="true"></div>
   {{ initial_live|safe }}
 </body>
 </html>

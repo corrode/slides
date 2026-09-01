@@ -65,6 +65,7 @@ pub struct EventQuery {
     view: Option<String>,
     slide: Option<usize>,
     presenter_slide: Option<usize>,
+    presenter_revision: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -86,6 +87,23 @@ pub struct AnswerForm {
 #[derive(Debug, Deserialize)]
 pub struct ReactionForm {
     slide: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionMarker {
+    slide: i64,
+    follow_revision: i64,
+    ended_at: Option<i64>,
+}
+
+impl From<&LiveSession> for SessionMarker {
+    fn from(session: &LiveSession) -> Self {
+        Self {
+            slide: session.current_slide,
+            follow_revision: session.follow_revision,
+            ended_at: session.ended_at,
+        }
+    }
 }
 
 pub async fn landing() -> AppResult<Response> {
@@ -142,8 +160,8 @@ pub async fn audience(
     .await?;
     let events_url = match query.slide {
         Some(slide) => format!(
-            "/sessions/{}/events?view=audience&slide={slide}&presenter_slide={}",
-            session.code, session.current_slide
+            "/sessions/{}/events?view=audience&slide={slide}&presenter_slide={}&presenter_revision={}",
+            session.code, session.current_slide, session.follow_revision
         ),
         None => format!("/sessions/{}/events?view=audience", session.code),
     };
@@ -208,11 +226,13 @@ pub async fn events(
     let mut requested_slide = historical_slide(
         query.slide,
         query.presenter_slide,
+        query.presenter_revision,
         session.current_slide as usize,
+        session.follow_revision,
     );
     let stream_state = state.clone();
     let stream_code = code.clone();
-    let mut last_marker = (session.current_slide, session.ended_at);
+    let mut last_marker = SessionMarker::from(&session);
 
     let events = stream! {
         let mut reconcile = tokio::time::interval(Duration::from_secs(1));
@@ -226,7 +246,7 @@ pub async fn events(
                 view,
                 participant.as_deref(),
                 requested_slide,
-                last_marker.0,
+                last_marker,
             ).await {
                 Ok((fragment, marker, reconciled_slide)) => {
                     last_marker = marker;
@@ -244,7 +264,7 @@ pub async fn events(
                 tokio::select! {
                     update = updates.recv() => match update {
                         Ok(LiveUpdate::Content) => break,
-                        Ok(LiveUpdate::SlideChanged)
+                        Ok(LiveUpdate::SlideChanged | LiveUpdate::Attention)
                         | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             requested_slide = None;
                             break;
@@ -253,9 +273,11 @@ pub async fn events(
                     },
                     _ = reconcile.tick() => match required_session(&stream_state, &stream_code).await {
                         Ok(fresh) => {
-                            let marker = (fresh.current_slide, fresh.ended_at);
+                            let marker = SessionMarker::from(&fresh);
                             if marker != last_marker {
-                                if fresh.current_slide != last_marker.0 {
+                                if marker.slide != last_marker.slide
+                                    || marker.follow_revision != last_marker.follow_revision
+                                {
                                     requested_slide = None;
                                 }
                                 break;
@@ -300,6 +322,54 @@ pub async fn next(
         (current + 1).min(len.saturating_sub(1))
     })
     .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn focus_audience(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    store::focus_audience(&state.pool, session.id).await?;
+    state.hub.notify(session.id, LiveUpdate::Attention).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn toggle_hand(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    let participant = participant_hash(&jar).ok_or_else(|| {
+        AppError::bad_request("Reload the presentation before raising your hand.")
+    })?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    let session = store::get_session(&state.pool, session.id).await?;
+    if session.ended_at.is_some() {
+        return Err(AppError::bad_request("This presentation has ended."));
+    }
+    store::toggle_hand(&state.pool, session.id, &participant).await?;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn reset_hands(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    store::reset_hands(&state.pool, session.id).await?;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -421,6 +491,18 @@ pub async fn answer(
             )
             .await?;
         }
+        Interaction::Ordering { options, .. } => {
+            let value = valid_ordering(&form.value, options.len())?;
+            store::replace_answer(
+                &state.pool,
+                session.id,
+                slide_index,
+                &participant,
+                "ordering",
+                &value,
+            )
+            .await?;
+        }
     }
     state.hub.notify(session.id, LiveUpdate::Content).await;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -432,7 +514,7 @@ pub async fn react(
     Path((code, kind)): Path<(String, String)>,
     Form(form): Form<ReactionForm>,
 ) -> AppResult<Response> {
-    const ALLOWED: &[&str] = &["heart", "thumbs-up", "applause", "laugh", "question"];
+    const ALLOWED: &[&str] = &["applause", "lightbulb", "question"];
     if !ALLOWED.contains(&kind.as_str()) {
         return Err(AppError::bad_request("Unknown reaction."));
     }
@@ -495,17 +577,19 @@ async fn snapshot(
     view: LiveView,
     participant: Option<&str>,
     requested_slide: Option<usize>,
-    expected_presenter_slide: i64,
-) -> AppResult<(String, (i64, Option<i64>), Option<usize>)> {
+    expected_marker: SessionMarker,
+) -> AppResult<(String, SessionMarker, Option<usize>)> {
     let session = required_session(state, code).await?;
     let requested_slide = historical_slide(
         requested_slide,
-        Some(expected_presenter_slide as usize),
+        Some(expected_marker.slide as usize),
+        Some(expected_marker.follow_revision),
         session.current_slide as usize,
+        session.follow_revision,
     );
     let version = store::get_version(&state.pool, session.deck_version_id).await?;
     let document = parse_deck(&version.source)?;
-    let marker = (session.current_slide, session.ended_at);
+    let marker = SessionMarker::from(&session);
     let fragment = render::live(
         &state.pool,
         &session,
@@ -574,24 +658,60 @@ fn normalize_words(value: &str) -> String {
         .to_lowercase()
 }
 
+fn valid_ordering(value: &str, option_count: usize) -> AppResult<String> {
+    let indices = value
+        .split(',')
+        .map(str::parse::<usize>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::bad_request("Invalid ordering."))?;
+    if indices.len() != option_count {
+        return Err(AppError::bad_request("Invalid ordering."));
+    }
+
+    let mut seen = vec![false; option_count];
+    for index in &indices {
+        if *index >= option_count || seen[*index] {
+            return Err(AppError::bad_request("Invalid ordering."));
+        }
+        seen[*index] = true;
+    }
+    Ok(indices
+        .into_iter()
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
 fn historical_slide(
     requested_slide: Option<usize>,
     observed_presenter_slide: Option<usize>,
+    observed_follow_revision: Option<i64>,
     current_presenter_slide: usize,
+    current_follow_revision: i64,
 ) -> Option<usize> {
-    (observed_presenter_slide == Some(current_presenter_slide))
-        .then_some(requested_slide)
-        .flatten()
+    (observed_presenter_slide == Some(current_presenter_slide)
+        && observed_follow_revision == Some(current_follow_revision))
+    .then_some(requested_slide)
+    .flatten()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::historical_slide;
+    use super::{historical_slide, valid_ordering};
 
     #[test]
-    fn historical_slide_expires_when_the_presenter_moves() {
-        assert_eq!(historical_slide(Some(1), Some(2), 2), Some(1));
-        assert_eq!(historical_slide(Some(1), Some(2), 3), None);
-        assert_eq!(historical_slide(Some(1), None, 2), None);
+    fn historical_slide_expires_when_the_presenter_moves_or_requests_attention() {
+        assert_eq!(historical_slide(Some(1), Some(2), Some(4), 2, 4), Some(1));
+        assert_eq!(historical_slide(Some(1), Some(2), Some(4), 3, 4), None);
+        assert_eq!(historical_slide(Some(1), Some(2), Some(4), 2, 5), None);
+        assert_eq!(historical_slide(Some(1), None, None, 2, 4), None);
+    }
+
+    #[test]
+    fn ordering_must_be_a_complete_permutation() {
+        assert_eq!(valid_ordering("2,0,1", 3).unwrap(), "2,0,1");
+        assert!(valid_ordering("0,0,1", 3).is_err());
+        assert!(valid_ordering("0,1", 3).is_err());
+        assert!(valid_ordering("0,1,3", 3).is_err());
     }
 }

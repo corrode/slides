@@ -44,6 +44,7 @@ pub struct LiveSession {
     pub locked: bool,
     pub interaction_open: bool,
     pub results_revealed: bool,
+    pub follow_revision: i64,
     pub ended_at: Option<i64>,
 }
 

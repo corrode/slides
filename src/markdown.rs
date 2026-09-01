@@ -35,6 +35,10 @@ pub enum Interaction {
         question: String,
         options: Vec<QuizOption>,
     },
+    Ordering {
+        prompt: String,
+        options: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +181,7 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
             "poll" => parse_poll(&header, &body)?,
             "wordcloud" => parse_word_cloud(&header, &body)?,
             "quiz" => parse_quiz(&header, &body)?,
+            "ordering" => parse_ordering(&header, &body)?,
             _ => unreachable!(),
         });
     }
@@ -189,6 +194,7 @@ fn interaction_kind(line: &str) -> Option<&'static str> {
         "poll" => Some("poll"),
         "wordcloud" => Some("wordcloud"),
         "quiz" => Some("quiz"),
+        "ordering" => Some("ordering"),
         _ => None,
     }
 }
@@ -266,6 +272,19 @@ fn parse_quiz(header: &str, body: &[&str]) -> Result<Interaction> {
         bail!("a quiz needs at least one correct option marked with [x]");
     }
     Ok(Interaction::Quiz { question, options })
+}
+
+fn parse_ordering(header: &str, body: &[&str]) -> Result<Interaction> {
+    let arguments = parse_arguments(header, &["prompt"], &[])?;
+    let prompt = arguments
+        .attribute("prompt")
+        .unwrap_or("Put these items in order")
+        .to_owned();
+    let options = list_items(body);
+    if options.len() < 2 {
+        bail!("an ordering interaction needs at least two items");
+    }
+    Ok(Interaction::Ordering { prompt, options })
 }
 
 fn list_items(lines: &[&str]) -> Vec<String> {
@@ -498,7 +517,7 @@ mod tests {
     fn kitchen_sink_example_covers_every_interaction() {
         let deck = parse_deck(include_str!("../examples/kitchen-sink.md")).unwrap();
 
-        assert_eq!(deck.slides.len(), 14);
+        assert_eq!(deck.slides.len(), 15);
         assert_eq!(
             deck.slides
                 .iter()
@@ -520,6 +539,13 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            deck.slides
+                .iter()
+                .filter(|slide| matches!(slide.interaction, Some(Interaction::Ordering { .. })))
+                .count(),
+            1
+        );
         assert!(matches!(
             deck.slides[7].interaction,
             Some(Interaction::Poll {
@@ -530,6 +556,20 @@ mod tests {
         assert!(matches!(
             deck.slides[8].interaction,
             Some(Interaction::Poll { multiple: true, .. })
+        ));
+    }
+
+    #[test]
+    fn parses_ordering_cards() {
+        let deck = parse_deck(
+            ":::ordering prompt=\"Put the release steps in order\"\n- Build\n- Test\n- Deploy\n:::",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &deck.slides[0].interaction,
+            Some(Interaction::Ordering { prompt, options })
+                if prompt == "Put the release steps in order" && options.len() == 3
         ));
     }
 

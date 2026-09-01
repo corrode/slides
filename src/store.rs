@@ -275,7 +275,7 @@ pub async fn active_session_for_deck(
 ) -> Result<Option<LiveSession>> {
     Ok(sqlx::query_as::<_, LiveSession>(
         r#"SELECT id, deck_version_id, code, current_slide, locked,
-                  interaction_open, results_revealed, ended_at
+                  interaction_open, results_revealed, follow_revision, ended_at
            FROM sessions WHERE deck_id = ? AND ended_at IS NULL"#,
     )
     .bind(deck_id)
@@ -286,7 +286,7 @@ pub async fn active_session_for_deck(
 pub async fn active_session_for_slug(pool: &SqlitePool, slug: &str) -> Result<Option<LiveSession>> {
     Ok(sqlx::query_as::<_, LiveSession>(
         r#"SELECT s.id, s.deck_version_id, s.code, s.current_slide, s.locked,
-                  s.interaction_open, s.results_revealed, s.ended_at
+                  s.interaction_open, s.results_revealed, s.follow_revision, s.ended_at
            FROM sessions s JOIN decks d ON d.id = s.deck_id
            WHERE d.slug = ? AND s.ended_at IS NULL"#,
     )
@@ -298,7 +298,7 @@ pub async fn active_session_for_slug(pool: &SqlitePool, slug: &str) -> Result<Op
 pub async fn session_by_code(pool: &SqlitePool, code: &str) -> Result<Option<LiveSession>> {
     Ok(sqlx::query_as::<_, LiveSession>(
         r#"SELECT id, deck_version_id, code, current_slide, locked,
-                  interaction_open, results_revealed, ended_at
+                  interaction_open, results_revealed, follow_revision, ended_at
            FROM sessions WHERE code = ?"#,
     )
     .bind(code)
@@ -309,7 +309,7 @@ pub async fn session_by_code(pool: &SqlitePool, code: &str) -> Result<Option<Liv
 pub async fn get_session(pool: &SqlitePool, id: i64) -> Result<LiveSession> {
     Ok(sqlx::query_as::<_, LiveSession>(
         r#"SELECT id, deck_version_id, code, current_slide, locked,
-                  interaction_open, results_revealed, ended_at
+                  interaction_open, results_revealed, follow_revision, ended_at
            FROM sessions WHERE id = ?"#,
     )
     .bind(id)
@@ -320,9 +320,20 @@ pub async fn get_session(pool: &SqlitePool, id: i64) -> Result<LiveSession> {
 pub async fn move_to_slide(pool: &SqlitePool, id: i64, slide: usize) -> Result<()> {
     sqlx::query(
         r#"UPDATE sessions SET current_slide = ?, interaction_open = 1,
-                  results_revealed = 0 WHERE id = ? AND ended_at IS NULL"#,
+                  results_revealed = 0, follow_revision = follow_revision + 1
+           WHERE id = ? AND ended_at IS NULL"#,
     )
     .bind(slide as i64)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn focus_audience(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE sessions SET follow_revision = follow_revision + 1 WHERE id = ? AND ended_at IS NULL",
+    )
     .bind(id)
     .execute(pool)
     .await?;
@@ -485,6 +496,20 @@ pub async fn answerer_count(pool: &SqlitePool, session_id: i64, slide_index: usi
     .await?)
 }
 
+pub async fn ordering_values(
+    pool: &SqlitePool,
+    session_id: i64,
+    slide_index: usize,
+) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT value FROM responses WHERE session_id = ? AND slide_index = ? AND kind = 'ordering'",
+    )
+    .bind(session_id)
+    .bind(slide_index as i64)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn add_reaction(
     pool: &SqlitePool,
     session_id: i64,
@@ -515,6 +540,64 @@ pub async fn add_reaction(
     .execute(pool)
     .await?;
     Ok(true)
+}
+
+pub async fn toggle_hand(
+    pool: &SqlitePool,
+    session_id: i64,
+    participant_hash: &str,
+) -> Result<bool> {
+    let removed =
+        sqlx::query("DELETE FROM raised_hands WHERE session_id = ? AND participant_hash = ?")
+            .bind(session_id)
+            .bind(participant_hash)
+            .execute(pool)
+            .await?;
+    if removed.rows_affected() > 0 {
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "INSERT INTO raised_hands (session_id, participant_hash, raised_at) VALUES (?, ?, ?)",
+    )
+    .bind(session_id)
+    .bind(participant_hash)
+    .bind(now_millis())
+    .execute(pool)
+    .await?;
+    Ok(true)
+}
+
+pub async fn hand_is_raised(
+    pool: &SqlitePool,
+    session_id: i64,
+    participant_hash: &str,
+) -> Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM raised_hands WHERE session_id = ? AND participant_hash = ?",
+    )
+    .bind(session_id)
+    .bind(participant_hash)
+    .fetch_one(pool)
+    .await?;
+    Ok(count > 0)
+}
+
+pub async fn raised_hand_count(pool: &SqlitePool, session_id: i64) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM raised_hands WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub async fn reset_hands(pool: &SqlitePool, session_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM raised_hands WHERE session_id = ?")
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn reaction_counts(
@@ -582,13 +665,52 @@ mod tests {
             .unwrap();
         assert_eq!(answerer_count(&pool, session.id, 0).await.unwrap(), 1);
         assert!(
-            add_reaction(&pool, session.id, 0, "participant", "heart")
+            add_reaction(&pool, session.id, 0, "participant", "applause")
                 .await
                 .unwrap()
         );
         assert_eq!(
             reaction_counts(&pool, session.id, 0).await.unwrap()[0].count,
             1
+        );
+
+        replace_answer(&pool, session.id, 1, "participant", "ordering", "2,0,1")
+            .await
+            .unwrap();
+        assert_eq!(
+            ordering_values(&pool, session.id, 1).await.unwrap(),
+            vec!["2,0,1"]
+        );
+
+        assert!(toggle_hand(&pool, session.id, "participant").await.unwrap());
+        assert!(
+            hand_is_raised(&pool, session.id, "participant")
+                .await
+                .unwrap()
+        );
+        assert_eq!(raised_hand_count(&pool, session.id).await.unwrap(), 1);
+        assert!(!toggle_hand(&pool, session.id, "participant").await.unwrap());
+        assert_eq!(raised_hand_count(&pool, session.id).await.unwrap(), 0);
+        assert!(toggle_hand(&pool, session.id, "participant").await.unwrap());
+        reset_hands(&pool, session.id).await.unwrap();
+        assert_eq!(raised_hand_count(&pool, session.id).await.unwrap(), 0);
+
+        move_to_slide(&pool, session.id, 1).await.unwrap();
+        move_to_slide(&pool, session.id, 0).await.unwrap();
+        assert_eq!(
+            get_session(&pool, session.id)
+                .await
+                .unwrap()
+                .follow_revision,
+            2
+        );
+        focus_audience(&pool, session.id).await.unwrap();
+        assert_eq!(
+            get_session(&pool, session.id)
+                .await
+                .unwrap()
+                .follow_revision,
+            3
         );
 
         end_session(&pool, session.id).await.unwrap();

@@ -16,6 +16,17 @@ pub enum LiveView {
     Audience,
 }
 
+#[derive(Debug, Default)]
+struct LiveData {
+    selected: Vec<String>,
+    counts: HashMap<String, i64>,
+    ordering_values: Vec<String>,
+    reactions: HashMap<String, i64>,
+    answerers: i64,
+    raised_hands: i64,
+    hand_raised: bool,
+}
+
 pub fn preview(document: &DeckDocument, theme: &Theme, show_join_code: bool) -> String {
     let Some(slide) = document.slides.first() else {
         return "<div class=\"empty-state\">Nothing to preview yet.</div>".into();
@@ -66,45 +77,49 @@ pub async fn live(
     } else {
         Vec::new()
     };
-    let counts = store::value_counts(pool, session.id, index).await?;
-    let answerers = store::answerer_count(pool, session.id, index).await?;
-    let reactions = store::reaction_counts(pool, session.id, index).await?;
-    let counts: HashMap<String, i64> = counts
+    let counts = store::value_counts(pool, session.id, index)
+        .await?
         .into_iter()
         .map(|item| (item.value, item.count))
         .collect();
-    let reactions: HashMap<String, i64> = reactions
+    let ordering_values = if matches!(&slide.interaction, Some(Interaction::Ordering { .. })) {
+        store::ordering_values(pool, session.id, index).await?
+    } else {
+        Vec::new()
+    };
+    let reactions = store::reaction_counts(pool, session.id, index)
+        .await?
         .into_iter()
         .map(|item| (item.kind, item.count))
         .collect();
+    let hand_raised = if let Some(participant_hash) = participant_hash {
+        store::hand_is_raised(pool, session.id, participant_hash).await?
+    } else {
+        false
+    };
+    let data = LiveData {
+        selected,
+        counts,
+        ordering_values,
+        reactions,
+        answerers: store::answerer_count(pool, session.id, index).await?,
+        raised_hands: store::raised_hand_count(pool, session.id).await?,
+        hand_raised,
+    };
 
     Ok(match view {
-        LiveView::Presenter => presenter_view(
-            session, version, document, slide, index, &counts, answerers, &reactions,
-        ),
-        LiveView::Audience => audience_view(
-            session,
-            slide,
-            index,
-            document.slides.len(),
-            &counts,
-            answerers,
-            &reactions,
-            &selected,
-        ),
+        LiveView::Presenter => presenter_view(session, version, document, slide, index, &data),
+        LiveView::Audience => audience_view(session, slide, index, document.slides.len(), &data),
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn presenter_view(
     session: &LiveSession,
     version: &DeckVersion,
     document: &DeckDocument,
     slide: &Slide,
     index: usize,
-    counts: &HashMap<String, i64>,
-    answerers: i64,
-    reactions: &HashMap<String, i64>,
+    data: &LiveData,
 ) -> String {
     let previous_disabled = if index == 0 { " disabled" } else { "" };
     let next_disabled = if index + 1 >= document.slides.len() {
@@ -112,98 +127,95 @@ fn presenter_view(
     } else {
         ""
     };
-    let lock_label = if session.locked {
-        "Allow free navigation"
+    let (lock_label, lock_icon, status) = if session.locked {
+        ("Allow free navigation", "unlock", "Future slides locked")
     } else {
-        "Prevent future slides"
+        ("Prevent future slides", "lock", "Free navigation")
     };
-    let status = if session.locked {
-        "Future slides locked"
-    } else {
-        "Free navigation"
-    };
-    let mut interaction = String::new();
-    if let Some(spec) = &slide.interaction {
-        interaction.push_str(&interaction_results(spec, counts, answerers, index));
-    }
+    let interaction = slide
+        .interaction
+        .as_ref()
+        .map(|spec| {
+            interaction_results(
+                spec,
+                &data.counts,
+                data.answerers,
+                index,
+                &data.ordering_values,
+            )
+        })
+        .unwrap_or_default();
     let code_on_slide = if version.show_join_code {
         format!(
-            "<div class=\"join-code\" style=\"position:absolute;right:2rem;top:2rem;font-size:1rem\">{}</div>",
+            "<div class=\"join-code presenter-code\">{}</div>",
             session.code
         )
     } else {
         String::new()
     };
-    let reaction_summary = reaction_buttons(&session.code, index, reactions, false);
     let interaction_controls = if slide.interaction.is_some() {
+        let action = if session.interaction_open {
+            "close"
+        } else {
+            "open"
+        };
+        let label = if session.interaction_open {
+            "Close responses"
+        } else {
+            "Open responses"
+        };
         format!(
-            "<button class=\"secondary small\" hx-post=\"/sessions/{}/interaction\" hx-vals='{{\"action\":\"{}\"}}' hx-swap=\"none\">{}</button><button class=\"secondary small\" hx-post=\"/sessions/{}/interaction\" hx-vals='{{\"action\":\"reveal\"}}' hx-swap=\"none\">Reveal results</button>",
+            "<form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{}\"><button class=\"secondary small\" type=\"submit\">{}{}</button></form><form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"reveal\"><button class=\"secondary small\" type=\"submit\">{}Reveal results</button></form>",
             session.code,
-            if session.interaction_open {
-                "close"
-            } else {
-                "open"
-            },
-            if session.interaction_open {
-                "Close responses"
-            } else {
-                "Open responses"
-            },
+            action,
+            icon("responses"),
+            label,
             session.code,
+            icon("reveal"),
         )
     } else {
         String::new()
     };
+    let hand_signal = presenter_hand_signal(&session.code, data.raised_hands);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\"><div><span class=\"status-pill live\">Live</span><strong>{}</strong><span>{}/{}</span><span class=\"status-pill\">{}</span></div><div><button class=\"secondary small\" hx-post=\"/sessions/{}/previous\" hx-swap=\"none\"{}>Previous</button><button class=\"secondary small\" hx-post=\"/sessions/{}/next\" hx-swap=\"none\"{}>Next</button><button class=\"secondary small\" hx-post=\"/sessions/{}/lock\" hx-swap=\"none\">{}</button>{}<form method=\"post\" action=\"/sessions/{}/end\" style=\"display:inline\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{}{}{}<div style=\"margin-top:auto;padding-top:1rem\">{}</div></div></article></div></main>",
-        encode_text(&version.title),
-        index + 1,
-        document.slides.len(),
-        status,
-        session.code,
-        previous_disabled,
-        session.code,
-        next_disabled,
-        session.code,
-        lock_label,
-        interaction_controls,
-        session.code,
-        code_on_slide,
-        slide.html,
-        interaction,
-        reaction_summary,
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\"><div class=\"presenter-status\"><span class=\"status-pill live\">Live</span><strong>{title}</strong><span>{position}/{total}</span><span class=\"status-pill\">{status}</span></div><div class=\"presenter-actions\"><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Share</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{code_on_slide}{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div><nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        title = encode_text(&version.title),
+        position = index + 1,
+        total = document.slides.len(),
+        code = session.code,
+        share_icon = icon("share"),
+        lock_icon_markup = icon(lock_icon),
+        end_icon = icon("end"),
+        slide_html = slide.html,
+        reactions = reaction_buttons(&session.code, index, &data.reactions, false),
+        previous_icon = icon("previous"),
+        attention_icon = icon("attention"),
+        next_icon = icon("next"),
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn audience_view(
     session: &LiveSession,
     slide: &Slide,
     index: usize,
     slide_count: usize,
-    counts: &HashMap<String, i64>,
-    answerers: i64,
-    reactions: &HashMap<String, i64>,
-    selected: &[String],
+    data: &LiveData,
 ) -> String {
-    let mut interaction = String::new();
-    if let Some(spec) = &slide.interaction {
-        interaction = audience_interaction(session, index, spec, counts, answerers, selected);
-    }
-    let reactions = reaction_buttons(&session.code, index, reactions, true);
+    let interaction = slide
+        .interaction
+        .as_ref()
+        .map(|spec| audience_interaction(session, index, spec, data))
+        .unwrap_or_default();
+    let reactions = reaction_buttons(&session.code, index, &data.reactions, true);
     let navigation = audience_navigation(session, index, slide_count);
     let following_presenter = index == session.current_slide as usize;
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{}\" data-following-presenter=\"{}\"><div id=\"live-error\"></div><div style=\"display:flex;justify-content:space-between;align-items:center\"><span class=\"status-pill live\">Live · {}</span><span class=\"status-pill\">Slide {}</span></div><section class=\"interaction\"><div class=\"slide-content\" style=\"padding:0;font-size:1rem\">{}</div>{}</section>{}{}</main>",
-        session.code,
-        following_presenter,
-        session.code,
-        index + 1,
-        slide.html,
-        interaction,
-        navigation,
-        reactions,
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><div class=\"audience-status\"><span class=\"status-pill live\">Live · {code}</span><span class=\"status-pill\">Slide {position}</span></div><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        code = session.code,
+        position = index + 1,
+        slide_html = slide.html,
+        hand_button = audience_hand_button(&session.code, data.hand_raised),
     )
 }
 
@@ -214,49 +226,79 @@ fn audience_navigation(session: &LiveSession, index: usize, slide_count: usize) 
     } else {
         slide_count.saturating_sub(1)
     };
-    let previous = (index > 0).then(|| {
+    let previous = if index > 0 {
         format!(
-            "<a class=\"button secondary small\" href=\"/join/{}?slide={}\">Previous</a>",
+            "<a class=\"button secondary\" data-nav=\"previous\" href=\"/join/{}?slide={}\">{}Previous</a>",
             session.code,
             index - 1,
+            icon("previous"),
         )
-    });
-    let next = (index < last_available).then(|| {
-        format!(
-            "<a class=\"button secondary small\" href=\"/join/{}?slide={}\">Next</a>",
-            session.code,
-            index + 1,
-        )
-    });
-    let follow = (index != current).then(|| {
-        format!(
-            "<a class=\"button small\" href=\"/join/{}\">Return to current slide</a>",
-            session.code,
-        )
-    });
-    let controls = [previous, next, follow]
-        .into_iter()
-        .flatten()
-        .collect::<String>();
-    if controls.is_empty() {
-        String::new()
     } else {
         format!(
-            "<nav style=\"display:flex;justify-content:center;gap:.6rem;flex-wrap:wrap\">{controls}</nav>"
+            "<span class=\"button secondary nav-placeholder\" aria-disabled=\"true\">{}Previous</span>",
+            icon("previous")
         )
-    }
+    };
+    let current_control = if index != current {
+        format!(
+            "<a class=\"button\" data-nav=\"current\" href=\"/join/{}\">{}Current</a>",
+            session.code,
+            icon("attention"),
+        )
+    } else {
+        format!(
+            "<span class=\"button nav-placeholder\" aria-disabled=\"true\">{}Current</span>",
+            icon("attention")
+        )
+    };
+    let next = if index < last_available {
+        format!(
+            "<a class=\"button secondary\" data-nav=\"next\" href=\"/join/{}?slide={}\">Next{}</a>",
+            session.code,
+            index + 1,
+            icon("next"),
+        )
+    } else {
+        format!(
+            "<span class=\"button secondary nav-placeholder\" aria-disabled=\"true\">Next{}</span>",
+            icon("next")
+        )
+    };
+    format!(
+        "<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\">{previous}{current_control}{next}</nav>"
+    )
 }
 
 fn audience_interaction(
     session: &LiveSession,
     slide_index: usize,
     spec: &Interaction,
-    counts: &HashMap<String, i64>,
-    answerers: i64,
-    selected: &[String],
+    data: &LiveData,
 ) -> String {
+    if let Interaction::Ordering { prompt, options } = spec {
+        let results = ordering_results(prompt, options, &data.ordering_values);
+        if session.results_revealed || !session.interaction_open {
+            return results;
+        }
+        return format!(
+            "{}{results}",
+            ordering_response(
+                &session.code,
+                slide_index,
+                prompt,
+                options,
+                data.selected.first().map(String::as_str),
+            )
+        );
+    }
     if session.results_revealed {
-        return interaction_results(spec, counts, answerers, slide_index);
+        return interaction_results(
+            spec,
+            &data.counts,
+            data.answerers,
+            slide_index,
+            &data.ordering_values,
+        );
     }
     if !session.interaction_open {
         return "<div class=\"notice\">Responses are closed. The presenter may reveal the results shortly.</div>".into();
@@ -273,7 +315,7 @@ fn audience_interaction(
                 &session.code,
                 slide_index,
                 options.iter().map(String::as_str),
-                selected,
+                &data.selected,
             );
             format!(
                 "<div class=\"interaction-body\"><h2>{}</h2><p>{}</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
@@ -292,7 +334,7 @@ fn audience_interaction(
             session.code,
             slide_index,
             max_length,
-            selected
+            data.selected
                 .first()
                 .map(|value| encode_double_quoted_attribute(value).to_string())
                 .unwrap_or_default(),
@@ -302,7 +344,7 @@ fn audience_interaction(
                 &session.code,
                 slide_index,
                 options.iter().map(|option| option.label.as_str()),
-                selected,
+                &data.selected,
             );
             format!(
                 "<div class=\"interaction-body\"><h2>{}</h2><p>Choose the correct answer.</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
@@ -310,6 +352,7 @@ fn audience_interaction(
                 choices
             )
         }
+        Interaction::Ordering { .. } => unreachable!("ordering handled above"),
     }
 }
 
@@ -343,6 +386,7 @@ fn interaction_results(
     counts: &HashMap<String, i64>,
     answerers: i64,
     slide_index: usize,
+    ordering_values: &[String],
 ) -> String {
     match spec {
         Interaction::Poll {
@@ -402,7 +446,112 @@ fn interaction_results(
                 )
             )
         }
+        Interaction::Ordering { prompt, options } => {
+            ordering_results(prompt, options, ordering_values)
+        }
     }
+}
+
+fn ordering_response(
+    code: &str,
+    slide_index: usize,
+    prompt: &str,
+    options: &[String],
+    selected: Option<&str>,
+) -> String {
+    let order = selected
+        .and_then(|value| parse_ordering_value(value, options.len()))
+        .unwrap_or_else(|| (0..options.len()).collect());
+    let value = order
+        .iter()
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let cards = order
+        .iter()
+        .enumerate()
+        .map(|(position, option_index)| {
+            let previous_disabled = if position == 0 { " disabled" } else { "" };
+            let next_disabled = if position + 1 == order.len() {
+                " disabled"
+            } else {
+                ""
+            };
+            format!(
+                "<li class=\"ordering-card\" draggable=\"true\" data-order-index=\"{option_index}\" data-order-label=\"{label_attribute}\"><span class=\"drag-handle\" aria-hidden=\"true\">{drag_icon}</span><span>{label}</span><span class=\"ordering-card-controls\"><button class=\"ghost small icon-only\" type=\"button\" data-order-move=\"up\" aria-label=\"Move {label_attribute} up\"{previous_disabled}>{up_icon}</button><button class=\"ghost small icon-only\" type=\"button\" data-order-move=\"down\" aria-label=\"Move {label_attribute} down\"{next_disabled}>{down_icon}</button></span></li>",
+                label = encode_text(&options[*option_index]),
+                label_attribute = encode_double_quoted_attribute(&options[*option_index]),
+                drag_icon = icon("drag"),
+                up_icon = icon("up"),
+                down_icon = icon("down"),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"interaction-body ordering-response\"><h2>{}</h2><p>Drag the cards into your preferred order. Changes are saved automatically.</p><div id=\"interaction-error\" role=\"alert\"></div><form class=\"ordering-form\" hx-post=\"/sessions/{}/answer\" hx-target=\"#interaction-error\" hx-swap=\"innerHTML\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><input type=\"hidden\" name=\"value\" value=\"{}\" data-order-value><p class=\"visually-hidden\" data-order-status role=\"status\"></p><ol class=\"ordering-cards\" data-ordering-list>{}</ol><div class=\"ordering-submit\"><button class=\"secondary\" type=\"submit\">{}Save order</button></div></form></section>",
+        encode_text(prompt),
+        code,
+        slide_index,
+        value,
+        cards,
+        icon("save"),
+    )
+}
+
+fn parse_ordering_value(value: &str, option_count: usize) -> Option<Vec<usize>> {
+    let order = value
+        .split(',')
+        .map(str::parse::<usize>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if order.len() != option_count {
+        return None;
+    }
+    let mut seen = vec![false; option_count];
+    for index in &order {
+        if *index >= option_count || seen[*index] {
+            return None;
+        }
+        seen[*index] = true;
+    }
+    Some(order)
+}
+
+fn ordering_results(prompt: &str, options: &[String], values: &[String]) -> String {
+    let orders = values
+        .iter()
+        .filter_map(|value| parse_ordering_value(value, options.len()))
+        .collect::<Vec<_>>();
+    if orders.is_empty() {
+        return format!(
+            "<section class=\"interaction-body group-ordering\"><div class=\"interaction-heading\"><h2>{}</h2><span>0 answers</span></div><div class=\"notice\">The group order will appear after the first response.</div></section>",
+            encode_text(prompt)
+        );
+    }
+
+    let mut scores = vec![0usize; options.len()];
+    for order in &orders {
+        for (position, option_index) in order.iter().enumerate() {
+            scores[*option_index] += position;
+        }
+    }
+    let mut ranked = (0..options.len()).collect::<Vec<_>>();
+    ranked.sort_by_key(|index| (scores[*index], *index));
+    let cards = ranked
+        .iter()
+        .map(|index| {
+            format!(
+                "<li class=\"ordering-card static\">{}</li>",
+                encode_text(&options[*index])
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"interaction-body group-ordering\"><div class=\"interaction-heading\"><h2>{}</h2><span>{}</span></div><p>Live group order</p><ol class=\"ordering-cards group-order\">{}</ol></section>",
+        encode_text(prompt),
+        answer_count_label(orders.len() as i64),
+        cards,
+    )
 }
 
 fn answer_count_label(count: i64) -> String {
@@ -451,25 +600,93 @@ fn reaction_buttons(
     counts: &HashMap<String, i64>,
     interactive: bool,
 ) -> String {
-    const REACTIONS: &[(&str, &str)] = &[
-        ("heart", "♥"),
-        ("thumbs-up", "👍"),
-        ("applause", "👏"),
-        ("laugh", "😄"),
-        ("question", "?"),
+    const REACTIONS: &[(&str, &str, &str)] = &[
+        ("applause", "👏", "Clap"),
+        ("lightbulb", "💡", "Lightbulb"),
+        ("question", "?", "Question mark"),
     ];
     let buttons = REACTIONS
         .iter()
-        .map(|(kind, symbol)| {
+        .map(|(kind, symbol, label)| {
             let count = counts.get(*kind).copied().unwrap_or(0);
+            let key = format!("{slide_index}-{kind}");
             if interactive {
-                format!("<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"React with {}\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\">{} <span class=\"count\">{}</span></button></form>", slide_index, kind, code, kind, symbol, count)
+                format!("<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"{}\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></button></form>", slide_index, label, code, kind, key, count, symbol, symbol, count)
             } else {
-                format!("<span class=\"reaction static\">{} <span class=\"count\">{}</span></span>", symbol, count)
+                format!("<span class=\"reaction static\" aria-label=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></span>", label, key, count, symbol, symbol, count)
             }
         })
         .collect::<String>();
     format!("<div class=\"reactions\">{buttons}</div>")
+}
+
+fn presenter_hand_signal(code: &str, count: i64) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let label = if count == 1 {
+        "1 person has a question".into()
+    } else {
+        format!("{count} people have questions")
+    };
+    format!(
+        "<form class=\"question-signal\" hx-post=\"/sessions/{code}/hands/reset\" hx-swap=\"none\"><button class=\"danger\" type=\"submit\"><span aria-hidden=\"true\">✋</span><span>{label} · Reset</span></button></form>"
+    )
+}
+
+fn audience_hand_button(code: &str, raised: bool) -> String {
+    format!(
+        "<button class=\"secondary hand-button{}\" type=\"button\" aria-pressed=\"{}\" hx-post=\"/sessions/{}/hand\" hx-swap=\"none\"><span aria-hidden=\"true\">✋</span>{}</button>",
+        if raised { " raised" } else { "" },
+        raised,
+        code,
+        if raised { "Lower hand" } else { "Raise hand" },
+    )
+}
+
+fn icon(name: &str) -> &'static str {
+    match name {
+        "previous" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m15 18-6-6 6-6\"/></svg>"
+        }
+        "next" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m9 18 6-6-6-6\"/></svg>"
+        }
+        "up" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m6 15 6-6 6 6\"/></svg>"
+        }
+        "down" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m6 9 6 6 6-6\"/></svg>"
+        }
+        "attention" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4\"/></svg>"
+        }
+        "share" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"18\" cy=\"5\" r=\"2\"/><circle cx=\"6\" cy=\"12\" r=\"2\"/><circle cx=\"18\" cy=\"19\" r=\"2\"/><path d=\"m8 11 8-5M8 13l8 5\"/></svg>"
+        }
+        "lock" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect x=\"5\" y=\"10\" width=\"14\" height=\"11\" rx=\"2\"/><path d=\"M8 10V7a4 4 0 0 1 8 0v3\"/></svg>"
+        }
+        "unlock" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect x=\"5\" y=\"10\" width=\"14\" height=\"11\" rx=\"2\"/><path d=\"M8 10V7a4 4 0 0 1 7.5-2\"/></svg>"
+        }
+        "responses" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 6h16M4 12h10M4 18h7\"/></svg>"
+        }
+        "reveal" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z\"/><circle cx=\"12\" cy=\"12\" r=\"2\"/></svg>"
+        }
+        "end" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m7 7 10 10M17 7 7 17\"/></svg>"
+        }
+        "drag" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M8 6h8M8 12h8M8 18h8\"/></svg>"
+        }
+        "save" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6\"/></svg>"
+        }
+        _ => "",
+    }
 }
 
 fn preview_interaction(spec: &Interaction) -> String {
@@ -502,5 +719,48 @@ fn preview_interaction(spec: &Interaction) -> String {
                 ))
                 .collect::<String>()
         ),
+        Interaction::Ordering { prompt, options } => format!(
+            "<h2>{}</h2><ol class=\"ordering-cards group-order\">{}</ol>",
+            encode_text(prompt),
+            options
+                .iter()
+                .map(|option| format!(
+                    "<li class=\"ordering-card static\">{}</li>",
+                    encode_text(option)
+                ))
+                .collect::<String>()
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ordering_response, ordering_results};
+
+    fn options() -> Vec<String> {
+        ["First", "Second", "Third"].map(str::to_owned).to_vec()
+    }
+
+    #[test]
+    fn source_order_can_be_submitted_unchanged() {
+        let html = ordering_response("123456", 2, "Rank them", &options(), None);
+
+        assert!(html.contains("name=\"value\" value=\"0,1,2\""));
+        assert!(html.contains("Save order"));
+    }
+
+    #[test]
+    fn group_order_uses_average_position_and_source_order_for_ties() {
+        let html = ordering_results(
+            "Rank them",
+            &options(),
+            &["2,0,1".into(), "0,2,1".into(), "invalid".into()],
+        );
+        let first = html.find("First").unwrap();
+        let third = html.find("Third").unwrap();
+        let second = html.find("Second").unwrap();
+
+        assert!(first < third && third < second);
+        assert!(html.contains("2 answers"));
     }
 }

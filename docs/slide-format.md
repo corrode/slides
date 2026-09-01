@@ -134,6 +134,23 @@ A word-cloud block has no body in v1.
 
 A quiz requires at least two non-empty checkbox options and at least one correct option. More than one answer may be marked correct.
 
+### Ordering
+
+```markdown
+:::ordering prompt="Put the release steps in order"
+- Build
+- Test
+- Deploy
+:::
+```
+
+| Input | Required | Meaning |
+| --- | --- | --- |
+| `prompt="…"` | No | Instruction shown above the cards. Defaults to `Put these items in order`. |
+| `- item` body lines | Yes | Defines draggable cards in their initial order. At least two non-empty items are required. |
+
+Each participant submits one complete ordering. Cards can be reordered with drag and drop or the accessible move buttons. Changes are saved immediately; participants can use **Save order** to submit the initial order unchanged. The current aggregate group order is visible to the presenter and audience in real time. Ties retain source order.
+
 ## Complete example
 
 ````markdown
@@ -170,6 +187,16 @@ fn consume(value: String) {
 :::quiz question="Which type owns its text?"
 - [x] String
 - [ ] &str
+:::
+
+---
+
+# Rank the steps
+
+:::ordering prompt="Put these steps in order"
+- Draft
+- Review
+- Publish
 :::
 ````
 

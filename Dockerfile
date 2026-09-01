@@ -28,6 +28,7 @@ COPY --from=builder --chown=slides:slides /build/assets ./assets
 
 ENV SLIDES_BIND=0.0.0.0:3000 \
     SLIDES_DATABASE_URL=sqlite://data/slides.db \
+    SLIDES_HEALTHCHECK_URL=http://127.0.0.1:3000/healthz \
     RUST_LOG=slides=info,tower_http=info
 
 USER slides
@@ -35,6 +36,6 @@ USER slides
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl --fail --silent "http://127.0.0.1:${SLIDES_BIND##*:}/healthz" || exit 1
+    CMD curl --fail --silent "${SLIDES_HEALTHCHECK_URL}" || exit 1
 
 CMD ["slides"]

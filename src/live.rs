@@ -11,6 +11,7 @@ pub struct LiveHub {
 pub enum LiveUpdate {
     Content,
     SlideChanged,
+    Attention,
 }
 
 #[derive(Debug)]
@@ -63,14 +64,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn distinguishes_content_updates_from_slide_changes() {
+    async fn distinguishes_live_update_kinds() {
         let hub = LiveHub::default();
         let mut updates = hub.subscribe(1).await;
 
         hub.notify(1, LiveUpdate::Content).await;
         hub.notify(1, LiveUpdate::SlideChanged).await;
+        hub.notify(1, LiveUpdate::Attention).await;
 
         assert_eq!(updates.recv().await.unwrap(), LiveUpdate::Content);
         assert_eq!(updates.recv().await.unwrap(), LiveUpdate::SlideChanged);
+        assert_eq!(updates.recv().await.unwrap(), LiveUpdate::Attention);
     }
 }

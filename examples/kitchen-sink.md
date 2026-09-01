@@ -139,15 +139,30 @@ Close responses when time is up, then reveal the answer and distribution.
 
 ---
 
+# Put the steps in order
+
+Drag the cards into your preferred sequence. The group order updates live for everyone.
+
+:::ordering prompt="How should a presentation come together?"
+- Find the story
+- Draft the slides
+- Rehearse the delivery
+- Invite the audience
+:::
+
+---
+
 # Presenter controls
 
 During a session you can:
 
 - move everyone to the previous or next slide;
+- call everyone back to the current slide;
+- see and reset raised hands;
 - allow free navigation or lock future slides;
 - open and close an interaction;
 - reveal results when you're ready;
-- end the session for every participant.
+- share the audience link or end the session.
 
 Audience members can browse completed slides until you move again.
 
@@ -155,9 +170,9 @@ Audience members can browse completed slides until you move again.
 
 # Reactions are always available
 
-Use the reaction bar now: **heart**, **thumbs up**, **applause**, **laugh**, or **question**.
+Use the reaction bar now: **clap**, **lightbulb**, or **question mark**.
 
-Every reaction updates live without refreshing the page.
+Reactions update live without refreshing the page and fly up the screen when motion is enabled.
 
 > Try opening the audience view in a second browser and watch both screens stay in sync.
 
