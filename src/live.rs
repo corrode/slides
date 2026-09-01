@@ -7,10 +7,16 @@ pub struct LiveHub {
     sessions: RwLock<HashMap<i64, Arc<SessionRuntime>>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveUpdate {
+    Content,
+    SlideChanged,
+}
+
 #[derive(Debug)]
 pub struct SessionRuntime {
     pub mutation: Mutex<()>,
-    updates: broadcast::Sender<()>,
+    updates: broadcast::Sender<LiveUpdate>,
 }
 
 impl LiveHub {
@@ -26,18 +32,18 @@ impl LiveHub {
             .clone()
     }
 
-    pub async fn subscribe(&self, session_id: i64) -> broadcast::Receiver<()> {
+    pub async fn subscribe(&self, session_id: i64) -> broadcast::Receiver<LiveUpdate> {
         self.runtime(session_id).await.updates.subscribe()
     }
 
-    pub async fn notify(&self, session_id: i64) {
+    pub async fn notify(&self, session_id: i64, update: LiveUpdate) {
         let runtime = self.runtime(session_id).await;
-        let _ = runtime.updates.send(());
+        let _ = runtime.updates.send(update);
     }
 
     pub async fn finish(&self, session_id: i64) {
         if let Some(runtime) = self.sessions.write().await.remove(&session_id) {
-            let _ = runtime.updates.send(());
+            let _ = runtime.updates.send(LiveUpdate::Content);
         }
     }
 }
@@ -49,5 +55,22 @@ impl SessionRuntime {
             mutation: Mutex::new(()),
             updates,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn distinguishes_content_updates_from_slide_changes() {
+        let hub = LiveHub::default();
+        let mut updates = hub.subscribe(1).await;
+
+        hub.notify(1, LiveUpdate::Content).await;
+        hub.notify(1, LiveUpdate::SlideChanged).await;
+
+        assert_eq!(updates.recv().await.unwrap(), LiveUpdate::Content);
+        assert_eq!(updates.recv().await.unwrap(), LiveUpdate::SlideChanged);
     }
 }

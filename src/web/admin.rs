@@ -47,7 +47,7 @@ pub struct LoginForm {
 #[derive(Debug, Deserialize)]
 pub struct NewDeckForm {
     title: String,
-    slug: String,
+    slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,9 +105,27 @@ pub async fn create_deck(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let title = form.title.trim();
-    let slug = form.slug.trim().to_ascii_lowercase();
     validate_title(title)?;
-    validate_slug(&slug)?;
+    let slug = match form
+        .slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|slug| !slug.is_empty())
+    {
+        Some(slug) => {
+            let slug = slug.to_ascii_lowercase();
+            validate_slug(&slug)?;
+            slug
+        }
+        None => {
+            let base = slugify_title(title).ok_or_else(|| {
+                AppError::bad_request(
+                    "Enter a shortlink for titles without ASCII letters or numbers.",
+                )
+            })?;
+            available_slug(&state, &base).await?
+        }
+    };
     let deck = store::create_deck(&state.pool, &slug, title)
         .await
         .map_err(|error| {
@@ -309,9 +327,8 @@ fn validate_title(title: &str) -> AppResult<()> {
 }
 
 fn validate_slug(slug: &str) -> AppResult<()> {
-    const RESERVED: &[&str] = &["admin", "assets", "join", "present", "sessions"];
-    let valid = (3..=48).contains(&slug.len())
-        && !slug.bytes().all(|byte| byte.is_ascii_digit())
+    const RESERVED: &[&str] = &["admin", "assets", "healthz", "join", "present", "sessions"];
+    let valid = (1..=48).contains(&slug.len())
         && slug
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
@@ -320,14 +337,94 @@ fn validate_slug(slug: &str) -> AppResult<()> {
         && !RESERVED.contains(&slug);
     if !valid {
         return Err(AppError::bad_request(
-            "Shortlinks must be 3–48 lowercase letters, numbers, or hyphens and cannot be all numeric.",
+            "Shortlinks must be 1–48 lowercase letters, numbers, or hyphens.",
         ));
     }
     Ok(())
+}
+
+fn slugify_title(title: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut pending_separator = false;
+
+    for character in title.chars() {
+        if character.is_ascii_alphanumeric() {
+            if pending_separator && !slug.is_empty() {
+                if slug.len() + 2 > 48 {
+                    break;
+                }
+                slug.push('-');
+            }
+            if slug.len() == 48 {
+                break;
+            }
+            slug.push(character.to_ascii_lowercase());
+            pending_separator = false;
+        } else if !slug.is_empty() {
+            pending_separator = true;
+        }
+    }
+
+    (!slug.is_empty()).then_some(slug)
+}
+
+async fn available_slug(state: &AppState, base: &str) -> AppResult<String> {
+    if validate_slug(base).is_ok() && store::deck_by_slug(&state.pool, base).await?.is_none() {
+        return Ok(base.to_owned());
+    }
+
+    for number in 2..=9_999 {
+        let suffix = format!("-{number}");
+        let base_length = (48 - suffix.len()).min(base.len());
+        let root = base[..base_length].trim_end_matches('-');
+        let candidate = format!("{root}{suffix}");
+        if store::deck_by_slug(&state.pool, &candidate)
+            .await?
+            .is_none()
+        {
+            return Ok(candidate);
+        }
+    }
+
+    Err(AppError::bad_request(
+        "Could not derive an unused shortlink. Enter one explicitly.",
+    ))
 }
 
 async fn required_deck(state: &AppState, slug: &str) -> AppResult<Deck> {
     store::deck_by_slug(&state.pool, slug)
         .await?
         .ok_or_else(|| AppError::not_found("Presentation not found."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{slugify_title, validate_slug};
+
+    #[test]
+    fn derives_clean_shortlinks_from_titles() {
+        assert_eq!(
+            slugify_title("  Rust   + Axum & SQLite! ").as_deref(),
+            Some("rust-axum-sqlite")
+        );
+        assert_eq!(slugify_title("2026").as_deref(), Some("2026"));
+        assert_eq!(slugify_title("---"), None);
+    }
+
+    #[test]
+    fn route_names_are_not_valid_shortlinks() {
+        assert!(validate_slug("healthz").is_err());
+        assert!(validate_slug("admin").is_err());
+        assert!(validate_slug("my-healthz-talk").is_ok());
+    }
+
+    #[test]
+    fn derived_shortlinks_do_not_exceed_the_limit() {
+        let slug = slugify_title(
+            "A very long presentation title with many words that cannot fit into one shortlink",
+        )
+        .unwrap();
+        assert!(slug.len() <= 48);
+        assert!(!slug.ends_with('-'));
+    }
 }

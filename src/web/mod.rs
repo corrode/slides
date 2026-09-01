@@ -7,7 +7,8 @@ use std::sync::Arc;
 use askama::Template;
 use axum::{
     Router,
-    http::{HeaderName, HeaderValue},
+    extract::State,
+    http::{HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -19,6 +20,7 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::
 use crate::{
     error::{AppError, AppResult},
     live::LiveHub,
+    store,
 };
 
 #[derive(Clone)]
@@ -33,6 +35,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(session::landing))
+        .route("/healthz", get(healthz))
         .route("/join", post(session::join_code))
         .route("/join/{code}", get(session::audience))
         .route("/admin/login", get(admin::login_page).post(admin::login))
@@ -73,6 +76,16 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn healthz(State(state): State<AppState>) -> StatusCode {
+    match store::healthcheck(&state.pool).await {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            tracing::warn!(?error, "health check failed");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
 }
 
 pub fn random_token() -> String {

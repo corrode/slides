@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     error::{AppError, AppResult},
+    live::LiveUpdate,
     markdown::{DeckDocument, Interaction, parse_deck},
     models::{LiveSession, Theme},
     store,
@@ -63,6 +64,7 @@ pub struct JoinForm {
 pub struct EventQuery {
     view: Option<String>,
     slide: Option<usize>,
+    presenter_slide: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -140,8 +142,8 @@ pub async fn audience(
     .await?;
     let events_url = match query.slide {
         Some(slide) => format!(
-            "/sessions/{}/events?view=audience&slide={slide}",
-            session.code
+            "/sessions/{}/events?view=audience&slide={slide}&presenter_slide={}",
+            session.code, session.current_slide
         ),
         None => format!("/sessions/{}/events?view=audience", session.code),
     };
@@ -201,21 +203,36 @@ pub async fn events(
         LiveView::Audience
     };
     let participant = participant_hash(&jar);
-    let requested_slide = query.slide;
     let mut updates = state.hub.subscribe(session.id).await;
+    let session = store::get_session(&state.pool, session.id).await?;
+    let mut requested_slide = historical_slide(
+        query.slide,
+        query.presenter_slide,
+        session.current_slide as usize,
+    );
     let stream_state = state.clone();
     let stream_code = code.clone();
+    let mut last_marker = (session.current_slide, session.ended_at);
 
     let events = stream! {
-        loop {
+        let mut reconcile = tokio::time::interval(Duration::from_secs(1));
+        reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        reconcile.tick().await;
+
+        'updates: loop {
             let fragment = match snapshot(
                 &stream_state,
                 &stream_code,
                 view,
                 participant.as_deref(),
                 requested_slide,
+                last_marker.0,
             ).await {
-                Ok(fragment) => fragment,
+                Ok((fragment, marker, reconciled_slide)) => {
+                    last_marker = marker;
+                    requested_slide = reconciled_slide;
+                    fragment
+                }
                 Err(error) => {
                     tracing::warn!(error = ?error, code = %stream_code, "could not render live update");
                     "<div id=\"live-error\" class=\"notice error\" hx-swap-oob=\"outerHTML\">Could not apply the latest live update. The next update will retry automatically.</div>".into()
@@ -223,9 +240,33 @@ pub async fn events(
             };
             yield Ok::<Event, Infallible>(Event::default().data(fragment));
 
-            match updates.recv().await {
-                Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            loop {
+                tokio::select! {
+                    update = updates.recv() => match update {
+                        Ok(LiveUpdate::Content) => break,
+                        Ok(LiveUpdate::SlideChanged)
+                        | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            requested_slide = None;
+                            break;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break 'updates,
+                    },
+                    _ = reconcile.tick() => match required_session(&stream_state, &stream_code).await {
+                        Ok(fresh) => {
+                            let marker = (fresh.current_slide, fresh.ended_at);
+                            if marker != last_marker {
+                                if fresh.current_slide != last_marker.0 {
+                                    requested_slide = None;
+                                }
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = ?error, code = %stream_code, "could not reconcile live session");
+                            break;
+                        }
+                    },
+                }
             }
         }
     };
@@ -273,7 +314,7 @@ pub async fn toggle_lock(
     let _guard = runtime.mutation.lock().await;
     let fresh = store::get_session(&state.pool, session.id).await?;
     store::set_lock(&state.pool, fresh.id, !fresh.locked).await?;
-    state.hub.notify(session.id).await;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -294,7 +335,7 @@ pub async fn interaction_state(
     let runtime = state.hub.runtime(session.id).await;
     let _guard = runtime.mutation.lock().await;
     store::set_interaction_state(&state.pool, session.id, open, revealed).await?;
-    state.hub.notify(session.id).await;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -381,7 +422,7 @@ pub async fn answer(
             .await?;
         }
     }
-    state.hub.notify(session.id).await;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -408,7 +449,7 @@ pub async fn react(
     let inserted =
         store::add_reaction(&state.pool, session.id, form.slide, &participant, &kind).await?;
     if inserted {
-        state.hub.notify(session.id).await;
+        state.hub.notify(session.id, LiveUpdate::Content).await;
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -438,9 +479,13 @@ async fn mutate_position(
     let session = store::get_session(&state.pool, session.id).await?;
     let version = store::get_version(&state.pool, session.deck_version_id).await?;
     let document = parse_deck(&version.source)?;
-    let target = update(session.current_slide as usize, document.slides.len());
+    let current = session.current_slide as usize;
+    let target = update(current, document.slides.len());
+    if target == current {
+        return Ok(());
+    }
     store::move_to_slide(&state.pool, session.id, target).await?;
-    state.hub.notify(session.id).await;
+    state.hub.notify(session.id, LiveUpdate::SlideChanged).await;
     Ok(())
 }
 
@@ -450,11 +495,18 @@ async fn snapshot(
     view: LiveView,
     participant: Option<&str>,
     requested_slide: Option<usize>,
-) -> AppResult<String> {
+    expected_presenter_slide: i64,
+) -> AppResult<(String, (i64, Option<i64>), Option<usize>)> {
     let session = required_session(state, code).await?;
+    let requested_slide = historical_slide(
+        requested_slide,
+        Some(expected_presenter_slide as usize),
+        session.current_slide as usize,
+    );
     let version = store::get_version(&state.pool, session.deck_version_id).await?;
     let document = parse_deck(&version.source)?;
-    Ok(render::live(
+    let marker = (session.current_slide, session.ended_at);
+    let fragment = render::live(
         &state.pool,
         &session,
         &version,
@@ -463,7 +515,8 @@ async fn snapshot(
         participant,
         requested_slide,
     )
-    .await?)
+    .await?;
+    Ok((fragment, marker, requested_slide))
 }
 
 async fn available_document(
@@ -519,4 +572,26 @@ fn normalize_words(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn historical_slide(
+    requested_slide: Option<usize>,
+    observed_presenter_slide: Option<usize>,
+    current_presenter_slide: usize,
+) -> Option<usize> {
+    (observed_presenter_slide == Some(current_presenter_slide))
+        .then_some(requested_slide)
+        .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::historical_slide;
+
+    #[test]
+    fn historical_slide_expires_when_the_presenter_moves() {
+        assert_eq!(historical_slide(Some(1), Some(2), 2), Some(1));
+        assert_eq!(historical_slide(Some(1), Some(2), 3), None);
+        assert_eq!(historical_slide(Some(1), None, 2), None);
+    }
 }

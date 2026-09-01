@@ -1,3 +1,7 @@
+pub const DEFAULT_THEME_BACKGROUND: &str = "#151616";
+pub const DEFAULT_THEME_TEXT: &str = "#f2f2ef";
+pub const DEFAULT_THEME_ACCENT: &str = "#fab71c";
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Deck {
     pub id: i64,
@@ -58,15 +62,19 @@ impl Theme {
             "mono" => "'SFMono-Regular', Consolas, monospace",
             _ => "Inter, ui-sans-serif, system-ui, sans-serif",
         };
+        let is_default = self.background == DEFAULT_THEME_BACKGROUND
+            && self.text == DEFAULT_THEME_TEXT
+            && self.accent == DEFAULT_THEME_ACCENT;
+        let surface = if is_default {
+            "#202121"
+        } else {
+            &self.background
+        };
+        let text_soft = if is_default { "#aaa9a4" } else { &self.text };
+
         format!(
-            "--font-display:{font};--font-sans:{font};--bg:{};--bg-deep:{};--surface:{};--text:{};--text-soft:{};--accent:{};--accent-bright:{}",
-            self.background,
-            self.background,
-            self.background,
-            self.text,
-            self.text,
-            self.accent,
-            self.accent,
+            "--font-display:{font};--font-sans:{font};--bg:{};--bg-deep:{};--surface:{};--text:{};--text-soft:{};--highlight:{}",
+            self.background, self.background, surface, self.text, text_soft, self.accent,
         )
     }
 }

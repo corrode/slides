@@ -7,38 +7,81 @@
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
 </head>
-<body>
-  <header class="topbar"><a class="brand" href="/admin">Slides</a><a class="button ghost small" href="/">Audience landing page</a></header>
-  <main class="shell">
-    <div class="landing-grid">
-      <section>
-        <h1>Your presentations</h1>
-        {% if decks.is_empty() %}<div class="empty-state">Create your first deck to get started.</div>{% else %}
-        <ul class="deck-list">
-          {% for deck in decks %}
-          <li class="deck-card">
-            <h2>{{ deck.title }}</h2>
-            <p>/{{ deck.slug }} · {{ deck.published_versions }} published</p>
-            {% match deck.active_code %}
-              {% when Some with (code) %}<span class="status-pill live">Live · {{ code }}</span>
-              {% when None %}<span class="status-pill">Draft</span>
-            {% endmatch %}
-            <a class="button secondary small" href="/admin/decks/{{ deck.slug }}/edit">Open editor</a>
-          </li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-      </section>
-      <section class="panel">
-        <h2>New presentation</h2>
-        <div id="create-error" role="alert"></div>
-        <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error">
-          <label>Title <input name="title" placeholder="Rust without the guesswork" required maxlength="120"></label>
-          <label>Shortlink <input name="slug" placeholder="rust-errors" pattern="[a-z0-9][a-z0-9-]{1,46}[a-z0-9]" required maxlength="48"></label>
-          <button type="submit">Create deck</button>
-        </form>
-      </section>
-    </div>
+<body class="admin-page">
+  <header class="topbar admin-topbar">
+    <a class="brand" href="/admin">Slides admin</a>
+    <nav aria-label="Admin navigation">
+      <a class="button ghost small" href="/">Audience view</a>
+    </nav>
+  </header>
+
+  <main class="admin-shell">
+    <header class="admin-heading">
+      <p class="eyebrow">Workspace</p>
+      <h1>Presentations</h1>
+      <p>Create a deck or continue working on an existing presentation.</p>
+    </header>
+
+    <ul class="presentation-grid">
+      <li>
+        <button class="new-presentation-card" type="button" popovertarget="create-presentation">
+          <span class="new-presentation-icon" aria-hidden="true">+</span>
+          <span>
+            <strong>New presentation</strong>
+            <small>Start with a blank Markdown deck</small>
+          </span>
+        </button>
+      </li>
+      {% for deck in decks %}
+      <li>
+        <a class="presentation-card" href="/admin/decks/{{ deck.slug }}/edit">
+          <span class="presentation-preview" aria-hidden="true">
+            <span class="presentation-preview-kicker">Presentation</span>
+            <strong>{{ deck.title }}</strong>
+            <span class="presentation-preview-line"></span>
+            <span class="presentation-preview-line short"></span>
+          </span>
+          <span class="presentation-card-body">
+            <span class="presentation-card-title">
+              <span>
+                <strong>{{ deck.title }}</strong>
+                <small>/{{ deck.slug }}</small>
+              </span>
+              <span class="presentation-card-arrow" aria-hidden="true">↗</span>
+            </span>
+            <span class="presentation-card-meta">
+              <span>{{ deck.published_versions }} published</span>
+              {% match deck.active_code %}
+                {% when Some with (code) %}<span class="status-pill live">Live · {{ code }}</span>
+                {% when None %}<span class="status-pill">Draft</span>
+              {% endmatch %}
+            </span>
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
   </main>
+
+  <section id="create-presentation" class="create-popover" popover role="dialog" aria-labelledby="create-presentation-title">
+    <header>
+      <div>
+        <p class="eyebrow">New deck</p>
+        <h2 id="create-presentation-title">Create a presentation</h2>
+      </div>
+      <button class="popover-close ghost" type="button" popovertarget="create-presentation" popovertargetaction="hide" aria-label="Close">×</button>
+    </header>
+    <div id="create-error" role="alert"></div>
+    <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error">
+      <label>Title
+        <input name="title" placeholder="Rust without the guesswork" required maxlength="120" autofocus>
+      </label>
+      <label>Shortlink <span class="optional-label">Optional</span>
+        <input name="slug" placeholder="Generated from the title" pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?" maxlength="48">
+        <small>Lowercase letters, numbers, and hyphens.</small>
+      </label>
+      <button type="submit">Create presentation</button>
+    </form>
+  </section>
 </body>
 </html>

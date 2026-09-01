@@ -48,7 +48,7 @@ pub async fn live(
     requested_slide: Option<usize>,
 ) -> Result<String> {
     if session.ended_at.is_some() {
-        return Ok("<main id=\"live-view\" class=\"audience-shell\" hx-swap-oob=\"outerMorph\"><section class=\"interaction\" style=\"text-align:center\"><p class=\"status-pill\">Session ended</p><h1>Thanks for taking part.</h1><p>The presenter has ended this presentation.</p></section></main>".into());
+        return Ok("<main id=\"live-view\" class=\"audience-shell\"><section class=\"interaction\" style=\"text-align:center\"><p class=\"status-pill\">Session ended</p><h1>Thanks for taking part.</h1><p>The presenter has ended this presentation.</p></section></main>".into());
     }
 
     let current = (session.current_slide as usize).min(document.slides.len().saturating_sub(1));
@@ -124,7 +124,7 @@ fn presenter_view(
     };
     let mut interaction = String::new();
     if let Some(spec) = &slide.interaction {
-        interaction.push_str(&interaction_results(spec, counts, answerers));
+        interaction.push_str(&interaction_results(spec, counts, answerers, index));
     }
     let code_on_slide = if version.show_join_code {
         format!(
@@ -156,7 +156,7 @@ fn presenter_view(
     };
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" hx-swap-oob=\"outerMorph\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\"><div><span class=\"status-pill live\">Live</span><strong>{}</strong><span>{}/{}</span><span class=\"status-pill\">{}</span></div><div><button class=\"secondary small\" hx-post=\"/sessions/{}/previous\" hx-swap=\"none\"{}>Previous</button><button class=\"secondary small\" hx-post=\"/sessions/{}/next\" hx-swap=\"none\"{}>Next</button><button class=\"secondary small\" hx-post=\"/sessions/{}/lock\" hx-swap=\"none\">{}</button>{}<form method=\"post\" action=\"/sessions/{}/end\" style=\"display:inline\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{}{}{}<div style=\"margin-top:auto;padding-top:1rem\">{}</div></div></article></div></main>",
+        "<main id=\"live-view\" class=\"presenter-shell\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\"><div><span class=\"status-pill live\">Live</span><strong>{}</strong><span>{}/{}</span><span class=\"status-pill\">{}</span></div><div><button class=\"secondary small\" hx-post=\"/sessions/{}/previous\" hx-swap=\"none\"{}>Previous</button><button class=\"secondary small\" hx-post=\"/sessions/{}/next\" hx-swap=\"none\"{}>Next</button><button class=\"secondary small\" hx-post=\"/sessions/{}/lock\" hx-swap=\"none\">{}</button>{}<form method=\"post\" action=\"/sessions/{}/end\" style=\"display:inline\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{}{}{}<div style=\"margin-top:auto;padding-top:1rem\">{}</div></div></article></div></main>",
         encode_text(&version.title),
         index + 1,
         document.slides.len(),
@@ -193,8 +193,11 @@ fn audience_view(
     }
     let reactions = reaction_buttons(&session.code, index, reactions, true);
     let navigation = audience_navigation(session, index, slide_count);
+    let following_presenter = index == session.current_slide as usize;
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" hx-swap-oob=\"outerMorph\"><div id=\"live-error\"></div><div style=\"display:flex;justify-content:space-between;align-items:center\"><span class=\"status-pill live\">Live · {}</span><span class=\"status-pill\">Slide {}</span></div><section class=\"interaction\"><div class=\"slide-content\" style=\"padding:0;font-size:1rem\">{}</div>{}</section>{}{}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{}\" data-following-presenter=\"{}\"><div id=\"live-error\"></div><div style=\"display:flex;justify-content:space-between;align-items:center\"><span class=\"status-pill live\">Live · {}</span><span class=\"status-pill\">Slide {}</span></div><section class=\"interaction\"><div class=\"slide-content\" style=\"padding:0;font-size:1rem\">{}</div>{}</section>{}{}</main>",
+        session.code,
+        following_presenter,
         session.code,
         index + 1,
         slide.html,
@@ -253,7 +256,7 @@ fn audience_interaction(
     selected: &[String],
 ) -> String {
     if session.results_revealed {
-        return interaction_results(spec, counts, answerers);
+        return interaction_results(spec, counts, answerers, slide_index);
     }
     if !session.interaction_open {
         return "<div class=\"notice\">Responses are closed. The presenter may reveal the results shortly.</div>".into();
@@ -339,6 +342,7 @@ fn interaction_results(
     spec: &Interaction,
     counts: &HashMap<String, i64>,
     answerers: i64,
+    slide_index: usize,
 ) -> String {
     match spec {
         Interaction::Poll {
@@ -350,7 +354,7 @@ fn interaction_results(
             "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\"><h2>{}</h2><span>{}</span></div>{}</section>",
             encode_text(question),
             answer_count_label(answerers),
-            chart(options, counts, answerers, *orientation),
+            chart(options, counts, answerers, *orientation, slide_index),
         ),
         Interaction::WordCloud { prompt, .. } => {
             let mut words: Vec<_> = counts.iter().collect();
@@ -389,7 +393,13 @@ fn interaction_results(
                 "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\"><h2>{}</h2><span>{}</span></div>{}</section>",
                 encode_text(question),
                 answer_count_label(answerers),
-                chart(&labels, counts, answerers, ChartOrientation::Horizontal)
+                chart(
+                    &labels,
+                    counts,
+                    answerers,
+                    ChartOrientation::Horizontal,
+                    slide_index,
+                )
             )
         }
     }
@@ -404,6 +414,7 @@ fn chart(
     counts: &HashMap<String, i64>,
     answerers: i64,
     orientation: ChartOrientation,
+    slide_index: usize,
 ) -> String {
     let denominator = answerers.max(1) as f64;
     match orientation {
@@ -414,7 +425,7 @@ fn chart(
                 .map(|(index, option)| {
                     let count = *counts.get(&index.to_string()).unwrap_or(&0);
                     let percentage = (count as f64 / denominator * 100.0).round() as i64;
-                    format!("<div class=\"result-row\"><span>{}</span><div class=\"bar-track\"><div class=\"bar-fill live\" style=\"--value:0%\" data-live-bar=\"option-{}\" data-bar-value=\"{}\"></div></div><span>{} · {}%</span></div>", encode_text(option), index, percentage, count, percentage)
+                    format!("<div class=\"result-row\"><span>{}</span><div class=\"bar-track\"><div class=\"bar-fill live\" style=\"--value:0%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\"></div></div><span>{} · {}%</span></div>", encode_text(option), slide_index, index, percentage, count, percentage)
                 })
                 .collect::<String>();
             format!("<div class=\"results\">{rows}</div>")
@@ -426,7 +437,7 @@ fn chart(
                 .map(|(index, option)| {
                     let count = *counts.get(&index.to_string()).unwrap_or(&0);
                     let percentage = (count as f64 / denominator * 100.0).round() as i64;
-                    format!("<div class=\"vertical-bar\" role=\"img\" aria-label=\"{}: {} responses, {} percent\" style=\"--value:0%\" data-live-bar=\"option-{}\" data-bar-value=\"{}\" data-label=\"{}\"></div>", encode_double_quoted_attribute(option), count, percentage, index, percentage, encode_double_quoted_attribute(option))
+                    format!("<div class=\"vertical-bar\" role=\"img\" aria-label=\"{}: {} responses, {} percent\" style=\"--value:0%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\" data-label=\"{}\"></div>", encode_double_quoted_attribute(option), count, percentage, slide_index, index, percentage, encode_double_quoted_attribute(option))
                 })
                 .collect::<String>();
             format!("<div class=\"vertical-chart\">{bars}</div>")

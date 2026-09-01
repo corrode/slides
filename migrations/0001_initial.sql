@@ -40,12 +40,15 @@ CREATE TABLE sessions (
     locked INTEGER NOT NULL DEFAULT 1 CHECK (locked IN (0, 1)),
     interaction_open INTEGER NOT NULL DEFAULT 1 CHECK (interaction_open IN (0, 1)),
     results_revealed INTEGER NOT NULL DEFAULT 0 CHECK (results_revealed IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,
     ended_at INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX one_active_session_per_deck
     ON sessions(deck_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX active_session_code
+    ON sessions(code) WHERE ended_at IS NULL;
 
 CREATE TABLE responses (
     id INTEGER PRIMARY KEY,

@@ -148,17 +148,7 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
             continue;
         }
         let line = lines[index].trim();
-        let kind = if line.starts_with(":::poll") {
-            Some("poll")
-        } else if line.starts_with(":::wordcloud") {
-            Some("wordcloud")
-        } else if line.starts_with(":::quiz") {
-            Some("quiz")
-        } else {
-            None
-        };
-
-        let Some(kind) = kind else {
+        let Some(kind) = interaction_kind(line) else {
             output.push(lines[index]);
             index += 1;
             continue;
@@ -185,7 +175,7 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
 
         interaction = Some(match kind {
             "poll" => parse_poll(&header, &body)?,
-            "wordcloud" => parse_word_cloud(&header)?,
+            "wordcloud" => parse_word_cloud(&header, &body)?,
             "quiz" => parse_quiz(&header, &body)?,
             _ => unreachable!(),
         });
@@ -194,13 +184,26 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
     Ok((output.join("\n"), interaction))
 }
 
+fn interaction_kind(line: &str) -> Option<&'static str> {
+    match line.strip_prefix(":::")?.split_whitespace().next()? {
+        "poll" => Some("poll"),
+        "wordcloud" => Some("wordcloud"),
+        "quiz" => Some("quiz"),
+        _ => None,
+    }
+}
+
 fn parse_poll(header: &str, body: &[&str]) -> Result<Interaction> {
-    let question = attribute(header, "question").unwrap_or_else(|| "Choose an option".into());
+    let arguments = parse_arguments(header, &["question", "orientation"], &["multiple"])?;
+    let question = arguments
+        .attribute("question")
+        .unwrap_or("Choose an option")
+        .to_owned();
     let options = list_items(body);
     if options.len() < 2 {
         bail!("a poll needs at least two options");
     }
-    let orientation = match attribute(header, "orientation").as_deref() {
+    let orientation = match arguments.attribute("orientation") {
         Some("vertical") => ChartOrientation::Vertical,
         Some("horizontal") | None => ChartOrientation::Horizontal,
         Some(value) => bail!("unsupported chart orientation {value:?}"),
@@ -208,15 +211,23 @@ fn parse_poll(header: &str, body: &[&str]) -> Result<Interaction> {
     Ok(Interaction::Poll {
         question,
         options,
-        multiple: flag(header, "multiple"),
+        multiple: arguments.flag("multiple"),
         orientation,
     })
 }
 
-fn parse_word_cloud(header: &str) -> Result<Interaction> {
-    let prompt = attribute(header, "prompt").unwrap_or_else(|| "What comes to mind?".into());
-    let max_length = attribute(header, "max")
-        .map(|value| value.parse::<usize>())
+fn parse_word_cloud(header: &str, body: &[&str]) -> Result<Interaction> {
+    let arguments = parse_arguments(header, &["prompt", "max"], &[])?;
+    if body.iter().any(|line| !line.trim().is_empty()) {
+        bail!("a word-cloud block cannot contain body content");
+    }
+    let prompt = arguments
+        .attribute("prompt")
+        .unwrap_or("What comes to mind?")
+        .to_owned();
+    let max_length = arguments
+        .attribute("max")
+        .map(str::parse::<usize>)
         .transpose()
         .context("word-cloud max must be a number")?
         .unwrap_or(80)
@@ -225,16 +236,18 @@ fn parse_word_cloud(header: &str) -> Result<Interaction> {
 }
 
 fn parse_quiz(header: &str, body: &[&str]) -> Result<Interaction> {
-    let question =
-        attribute(header, "question").unwrap_or_else(|| "Choose the correct answer".into());
+    let arguments = parse_arguments(header, &["question"], &[])?;
+    let question = arguments
+        .attribute("question")
+        .unwrap_or("Choose the correct answer")
+        .to_owned();
     let mut options = Vec::new();
     for line in body {
-        let trimmed = line.trim();
-        let (correct, label) = if let Some(label) = trimmed.strip_prefix("- [x]") {
+        let (correct, label) = if let Some(label) = line.strip_prefix("- [x]") {
             (true, label.trim())
-        } else if let Some(label) = trimmed.strip_prefix("- [X]") {
+        } else if let Some(label) = line.strip_prefix("- [X]") {
             (true, label.trim())
-        } else if let Some(label) = trimmed.strip_prefix("- [ ]") {
+        } else if let Some(label) = line.strip_prefix("- [ ]") {
             (false, label.trim())
         } else {
             continue;
@@ -258,25 +271,96 @@ fn parse_quiz(header: &str, body: &[&str]) -> Result<Interaction> {
 fn list_items(lines: &[&str]) -> Vec<String> {
     lines
         .iter()
-        .filter_map(|line| line.trim().strip_prefix("- "))
+        .filter_map(|line| line.strip_prefix("- "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .collect()
 }
 
-fn attribute(header: &str, key: &str) -> Option<String> {
-    let needle = format!("{key}=\"");
-    let start = header.find(&needle)? + needle.len();
-    let rest = &header[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_owned())
+#[derive(Debug, Default)]
+struct DirectiveArguments {
+    attributes: Vec<(String, String)>,
+    flags: Vec<String>,
 }
 
-fn flag(header: &str, name: &str) -> bool {
-    header
-        .split_whitespace()
-        .any(|part| part.trim_end_matches(":::") == name)
+impl DirectiveArguments {
+    fn attribute(&self, key: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find_map(|(name, value)| (name == key).then_some(value.as_str()))
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.flags.iter().any(|flag| flag == name)
+    }
+}
+
+fn parse_arguments(
+    header: &str,
+    allowed_attributes: &[&str],
+    allowed_flags: &[&str],
+) -> Result<DirectiveArguments> {
+    let directive = header
+        .strip_prefix(":::")
+        .context("interaction directive must start with :::")?;
+    let name_end = directive
+        .find(char::is_whitespace)
+        .unwrap_or(directive.len());
+    let mut input = &directive[name_end..];
+    let mut arguments = DirectiveArguments::default();
+
+    while !input.trim_start().is_empty() {
+        input = input.trim_start();
+        let key_end = input
+            .find(|character: char| character.is_whitespace() || character == '=')
+            .unwrap_or(input.len());
+        if key_end == 0 {
+            bail!("malformed interaction argument near {input:?}");
+        }
+        let key = &input[..key_end];
+        input = &input[key_end..];
+
+        if let Some(value_input) = input.strip_prefix("=\"") {
+            if !allowed_attributes.contains(&key) {
+                bail!("unsupported interaction attribute {key:?}");
+            }
+            if arguments
+                .attributes
+                .iter()
+                .any(|(existing, _)| existing == key)
+            {
+                bail!("duplicate interaction attribute {key:?}");
+            }
+            let value_end = value_input.find('"').with_context(|| {
+                format!("interaction attribute {key:?} is missing a closing quote")
+            })?;
+            let after = &value_input[value_end + 1..];
+            if after
+                .chars()
+                .next()
+                .is_some_and(|character| !character.is_whitespace())
+            {
+                bail!("interaction attribute {key:?} must be followed by whitespace");
+            }
+            arguments
+                .attributes
+                .push((key.to_owned(), value_input[..value_end].to_owned()));
+            input = after;
+        } else if input.starts_with('=') {
+            bail!("interaction attribute {key:?} must use a quoted value");
+        } else {
+            if !allowed_flags.contains(&key) {
+                bail!("unsupported interaction flag {key:?}");
+            }
+            if arguments.flags.iter().any(|existing| existing == key) {
+                bail!("duplicate interaction flag {key:?}");
+            }
+            arguments.flags.push(key.to_owned());
+        }
+    }
+
+    Ok(arguments)
 }
 
 fn render_markdown(source: &str) -> String {
@@ -411,6 +495,45 @@ mod tests {
     }
 
     #[test]
+    fn kitchen_sink_example_covers_every_interaction() {
+        let deck = parse_deck(include_str!("../examples/kitchen-sink.md")).unwrap();
+
+        assert_eq!(deck.slides.len(), 14);
+        assert_eq!(
+            deck.slides
+                .iter()
+                .filter(|slide| matches!(slide.interaction, Some(Interaction::Poll { .. })))
+                .count(),
+            3
+        );
+        assert_eq!(
+            deck.slides
+                .iter()
+                .filter(|slide| matches!(slide.interaction, Some(Interaction::WordCloud { .. })))
+                .count(),
+            1
+        );
+        assert_eq!(
+            deck.slides
+                .iter()
+                .filter(|slide| matches!(slide.interaction, Some(Interaction::Quiz { .. })))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            deck.slides[7].interaction,
+            Some(Interaction::Poll {
+                orientation: ChartOrientation::Vertical,
+                ..
+            })
+        ));
+        assert!(matches!(
+            deck.slides[8].interaction,
+            Some(Interaction::Poll { multiple: true, .. })
+        ));
+    }
+
+    #[test]
     fn strips_raw_html() {
         let deck = parse_deck("<script>alert(1)</script>").unwrap();
         assert!(!deck.slides[0].html.contains("<script>"));
@@ -430,5 +553,46 @@ mod tests {
         let deck = parse_deck("[unsafe](javascript:alert(1)) [safe](https://example.com)").unwrap();
         assert!(!deck.slides[0].html.contains("javascript:"));
         assert!(deck.slides[0].html.contains("https://example.com"));
+    }
+
+    #[test]
+    fn requires_exact_interaction_names() {
+        let deck = parse_deck(":::poll-results\n- Rust\n- Go\n:::").unwrap();
+        assert!(deck.slides[0].interaction.is_none());
+        assert!(deck.slides[0].html.contains("poll-results"));
+    }
+
+    #[test]
+    fn rejects_word_cloud_body_content() {
+        let error = parse_deck(":::wordcloud\nunexpected\n:::").unwrap_err();
+        assert!(error.to_string().contains("slide 1"));
+    }
+
+    #[test]
+    fn interaction_arguments_follow_the_declared_grammar() {
+        for source in [
+            ":::poll notquestion=\"Wrong\"\n- Rust\n- Go\n:::",
+            ":::poll orientation=vertical\n- Rust\n- Go\n:::",
+            ":::wordcloud max=abc\n:::",
+        ] {
+            let error = parse_deck(source).unwrap_err();
+            assert!(error.to_string().contains("slide 1"));
+        }
+
+        let deck =
+            parse_deck(":::poll question=\"Choose multiple values\"\n- Rust\n- Go\n:::").unwrap();
+        assert!(matches!(
+            deck.slides[0].interaction,
+            Some(Interaction::Poll {
+                multiple: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn nested_poll_options_do_not_count() {
+        let error = parse_deck(":::poll\n- Rust\n  - nested\n:::").unwrap_err();
+        assert!(error.to_string().contains("slide 1"));
     }
 }

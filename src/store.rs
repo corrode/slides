@@ -9,7 +9,10 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 
-use crate::models::{Deck, DeckSummary, DeckVersion, LiveSession};
+use crate::models::{
+    DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck, DeckSummary,
+    DeckVersion, LiveSession,
+};
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ValueCount {
@@ -37,6 +40,11 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
+pub async fn healthcheck(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("SELECT 1").execute(pool).await?;
+    Ok(())
+}
+
 pub async fn list_decks(pool: &SqlitePool) -> Result<Vec<DeckSummary>> {
     Ok(sqlx::query_as::<_, DeckSummary>(
         r#"
@@ -57,11 +65,16 @@ pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<D
         "# {title}\n\nYour presentation starts here.\n\n---\n\n# Ask the audience\n\n:::poll question=\"Which option do you prefer?\"\n- The first option\n- The second option\n:::"
     );
     let id = sqlx::query(
-        "INSERT INTO decks (slug, title, draft_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        r#"INSERT INTO decks
+           (slug, title, draft_source, theme_background, theme_text, theme_accent, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(slug)
     .bind(title)
     .bind(source)
+    .bind(DEFAULT_THEME_BACKGROUND)
+    .bind(DEFAULT_THEME_TEXT)
+    .bind(DEFAULT_THEME_ACCENT)
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -529,16 +542,26 @@ pub fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Theme;
 
     #[tokio::test]
     async fn publishes_and_runs_a_session() {
         let directory = tempfile::tempdir().unwrap();
         let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
         let pool = connect(&database_url).await.unwrap();
+        healthcheck(&pool).await.unwrap();
 
         let deck = create_deck(&pool, "rust-errors", "Rust Errors")
             .await
             .unwrap();
+        assert_eq!(deck.theme_background, DEFAULT_THEME_BACKGROUND);
+        assert_eq!(deck.theme_text, DEFAULT_THEME_TEXT);
+        assert_eq!(deck.theme_accent, DEFAULT_THEME_ACCENT);
+        let theme_style = Theme::from(&deck).style();
+        assert!(theme_style.contains("--surface:#202121"));
+        assert!(theme_style.contains("--highlight:#fab71c"));
+        assert!(!theme_style.contains("gradient"));
+
         let version_id = save_and_publish_deck(
             &pool,
             deck.id,

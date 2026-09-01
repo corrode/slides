@@ -10,7 +10,7 @@
   <script src="/assets/app.js" defer></script>
 </head>
 <body style="{{ theme_style }}">
-  <div hx-sse:connect="{{ events_url }}" hx-swap="none"></div>
+  <div hx-sse:connect="{{ events_url }}" hx-target="#live-view" hx-swap="outerMorph"></div>
   {{ initial_live|safe }}
 </body>
 </html>
