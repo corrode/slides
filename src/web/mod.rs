@@ -42,7 +42,6 @@ pub fn router(state: AppState) -> Router {
         .route("/admin", get(admin::dashboard))
         .route("/admin/decks", post(admin::create_deck))
         .route("/admin/decks/{slug}/edit", get(admin::editor))
-        .route("/admin/decks/{slug}/preview", post(admin::preview))
         .route("/admin/decks/{slug}/save", post(admin::save))
         .route("/admin/decks/{slug}/publish", post(admin::publish))
         .route("/admin/decks/{slug}/sessions", post(admin::start_session))

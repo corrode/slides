@@ -2,6 +2,7 @@
   const previousBarValues = new Map();
   const reactionCounts = new Map();
   let slideBeforeSwap = null;
+  let previewSlideBeforeSwap = 0;
   let pointerCard = null;
 
   function rememberBars() {
@@ -81,6 +82,34 @@
     });
   }
 
+  function showPreviewSlide(deck, requestedIndex) {
+    const slides = [...deck.querySelectorAll("[data-preview-slide]")];
+    if (slides.length === 0) return;
+    const index = Math.max(0, Math.min(requestedIndex, slides.length - 1));
+    slides.forEach((slide, slideIndex) => {
+      const active = slideIndex === index;
+      slide.classList.toggle("active", active);
+      slide.setAttribute("aria-current", active ? "true" : "false");
+    });
+    deck.dataset.slideIndex = `${index}`;
+    const previous = deck.querySelector('[data-preview-nav="previous"]');
+    const next = deck.querySelector('[data-preview-nav="next"]');
+    if (previous) previous.disabled = index === 0;
+    if (next) next.disabled = index + 1 === slides.length;
+    const position = deck.querySelector("[data-preview-position]");
+    if (position) position.textContent = `Slide ${index + 1} of ${slides.length}`;
+  }
+
+  function rememberPreviewSlide() {
+    const deck = document.querySelector("[data-preview-deck]");
+    previewSlideBeforeSwap = Number.parseInt(deck?.dataset.slideIndex || "0", 10);
+  }
+
+  function restorePreviewSlide() {
+    const deck = document.querySelector("[data-preview-deck]");
+    if (deck) showPreviewSlide(deck, previewSlideBeforeSwap);
+  }
+
   function blocksSlideShortcuts(target) {
     return (
       target instanceof HTMLElement &&
@@ -91,7 +120,9 @@
   }
 
   function keyboardNavigation(event) {
-    if (!document.querySelector(".presenter-shell")) return;
+    const presenter = document.querySelector(".presenter-shell");
+    const preview = document.querySelector("[data-preview-deck]");
+    if (!presenter && !preview) return;
     if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
@@ -108,11 +139,17 @@
     if (event.key === "ArrowLeft" || event.key === "PageUp") action = "previous";
     if (event.key === "ArrowRight" || event.key === "PageDown") action = "next";
     if (event.key === "Home") action = "current";
-    if (event.key === " " && document.querySelector(".presenter-shell")) action = "next";
+    if (event.key === " " && presenter) action = "next";
     if (!action) return;
+    if (preview && !presenter && action === "current") {
+      event.preventDefault();
+      showPreviewSlide(preview, 0);
+      return;
+    }
 
+    const selector = presenter ? `[data-nav="${action}"]` : `[data-preview-nav="${action}"]`;
     const control = document.querySelector(
-      `[data-nav="${action}"]:not([disabled]):not([aria-disabled="true"])`,
+      `${selector}:not([disabled]):not([aria-disabled="true"])`,
     );
     if (!control) return;
     event.preventDefault();
@@ -204,6 +241,7 @@
     followPresenter();
     rememberSlide();
     updateReactionFeed(false);
+    restorePreviewSlide();
   });
 
   document.addEventListener("keydown", keyboardNavigation);
@@ -214,6 +252,15 @@
   });
 
   document.addEventListener("click", (event) => {
+    const previewControl = event.target.closest("[data-preview-nav]");
+    if (previewControl) {
+      const deck = previewControl.closest("[data-preview-deck]");
+      const current = Number.parseInt(deck?.dataset.slideIndex || "0", 10);
+      if (deck) {
+        showPreviewSlide(deck, current + (previewControl.dataset.previewNav === "next" ? 1 : -1));
+      }
+      return;
+    }
     const share = event.target.closest("[data-share-url]");
     if (share) {
       sharePresentation(share);
@@ -291,6 +338,7 @@
   document.addEventListener("htmx:before:swap", () => {
     rememberBars();
     rememberSlide();
+    rememberPreviewSlide();
   });
 
   document.addEventListener("htmx:after:swap", () => {
@@ -298,5 +346,6 @@
     followPresenter();
     indicateSlideChange();
     updateReactionFeed(true);
+    restorePreviewSlide();
   });
 })();

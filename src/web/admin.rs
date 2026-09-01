@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     error::{AppError, AppResult},
-    markdown::parse_deck,
+    markdown::{DeckDocument, parse_deck},
     models::{Deck, DeckSummary, Theme},
     store,
     web::{AppState, is_admin, require_admin, template},
@@ -175,26 +175,6 @@ pub async fn editor(
     })
 }
 
-pub async fn preview(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    Path(slug): Path<String>,
-    Form(form): Form<DeckForm>,
-) -> AppResult<Response> {
-    require_admin(&jar, &state)?;
-    let _ = required_deck(&state, &slug).await?;
-    validate_deck_form(&form)?;
-    let document =
-        parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
-    let theme = theme_from_form(&form);
-    Ok(Html(render::preview(
-        &document,
-        &theme,
-        form.show_join_code.is_some(),
-    ))
-    .into_response())
-}
-
 pub async fn save(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -203,10 +183,15 @@ pub async fn save(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    save_form(&state, deck.id, &form).await?;
-    Ok(Html(
-        "<div class=\"notice\">Draft saved. Your published version is unchanged.</div>".to_owned(),
-    )
+    let document = save_form(&state, deck.id, &form).await?;
+    let preview = render::preview(
+        &document,
+        &theme_from_form(&form),
+        form.show_join_code.is_some(),
+    );
+    Ok(Html(format!(
+        "<div id=\"notice\" hx-swap-oob=\"innerHTML\"></div><section id=\"preview\" hx-swap-oob=\"innerHTML\">{preview}</section>"
+    ))
     .into_response())
 }
 
@@ -266,9 +251,10 @@ pub async fn start_session(
     Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
 }
 
-async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<()> {
+async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<DeckDocument> {
     validate_deck_form(form)?;
-    parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let document =
+        parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
     store::save_deck(
         &state.pool,
         deck_id,
@@ -281,7 +267,7 @@ async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult
         form.show_join_code.is_some(),
     )
     .await?;
-    Ok(())
+    Ok(document)
 }
 
 fn validate_deck_form(form: &DeckForm) -> AppResult<()> {

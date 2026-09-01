@@ -6,8 +6,9 @@
   <title>Edit {{ deck.title }} · Slides</title>
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
 </head>
-<body>
+<body class="editor-page">
   <header class="topbar">
     <a class="brand" href="/admin">Slides</a>
     <div>
@@ -19,11 +20,11 @@
       {% endmatch %}
     </div>
   </header>
-  <main class="shell" style="width:min(100% - 1rem, 100rem)">
+  <main class="shell editor-shell">
     <div id="notice" role="status" aria-live="polite"></div>
     <div class="editor-layout">
       <section class="editor-pane">
-        <form id="deck-form" method="post" action="/admin/decks/{{ deck.slug }}/save">
+        <form id="deck-form" method="post" action="/admin/decks/{{ deck.slug }}/save" hx-post="/admin/decks/{{ deck.slug }}/save" hx-trigger="input delay:400ms" hx-target="#notice" hx-swap="innerHTML" hx-sync="this:replace">
           <label>Title <input name="title" value="{{ deck.title }}" required maxlength="120"></label>
           <label>Markdown
             <textarea name="source" required spellcheck="true">{{ deck.draft_source }}</textarea>
@@ -45,8 +46,6 @@
             <label style="display:flex;grid-template-columns:auto 1fr;align-items:center;margin-top:1rem"><input style="width:auto" type="checkbox" name="show_join_code" value="yes"{% if deck.show_join_code %} checked{% endif %}> Show the join code on slides</label>
           </details>
           <div style="display:flex;flex-wrap:wrap;gap:.6rem">
-            <button type="button" hx-post="/admin/decks/{{ deck.slug }}/preview" hx-include="#deck-form" hx-target="#preview" hx-swap="innerHTML">Preview unsaved changes</button>
-            <button class="secondary" type="button" hx-post="/admin/decks/{{ deck.slug }}/save" hx-include="#deck-form" hx-target="#notice">Save draft</button>
             <button class="ghost" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice">Publish version</button>
           </div>
         </form>

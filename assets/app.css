@@ -651,11 +651,21 @@ button.small {
   display: contents;
 }
 
+.editor-page .topbar {
+  padding-inline: 0.5rem;
+}
+
+.editor-shell {
+  width: calc(100% - 1rem);
+  max-width: none;
+  padding-block: calc(var(--topbar-height) + 0.5rem) 0.5rem;
+}
+
 .editor-layout {
   display: grid;
-  min-height: calc(100vh - var(--topbar-height) - 3rem);
-  grid-template-columns: minmax(18rem, 0.78fr) minmax(25rem, 1.22fr);
-  gap: 1rem;
+  min-height: calc(100vh - var(--topbar-height) - 1rem);
+  grid-template-columns: minmax(20rem, 32rem) minmax(0, 1fr);
+  gap: 0.5rem;
 }
 
 .editor-pane,
@@ -685,8 +695,77 @@ button.small {
 .preview-pane {
   display: grid;
   place-items: center;
-  padding: clamp(0.75rem, 2vw, 1.5rem);
+  padding: 0.75rem;
   background: var(--bg);
+}
+
+.editor-preview {
+  container-type: inline-size;
+  display: grid;
+  width: 100%;
+  gap: 0.75rem;
+}
+
+.editor-preview .slide-stage {
+  width: 100%;
+  max-width: none;
+}
+
+.editor-preview .slide-content {
+  padding: clamp(1rem, 4.5cqw, 3.5rem);
+  font-size: clamp(0.7rem, 1.6cqw, 1.2rem);
+}
+
+.editor-preview .slide-content h1 {
+  font-size: clamp(1.4rem, 5cqw, 4rem);
+}
+
+.editor-preview .slide-content h2 {
+  font-size: clamp(1rem, 3.5cqw, 2.8rem);
+}
+
+.editor-preview .choices {
+  gap: clamp(0.3rem, 0.8cqw, 0.75rem);
+  margin-top: clamp(0.5rem, 1.2cqw, 1rem);
+}
+
+.editor-preview .choice {
+  min-height: clamp(2rem, 5.5cqw, 4rem);
+  gap: clamp(0.35rem, 0.8cqw, 0.75rem);
+  padding: clamp(0.4rem, 1cqw, 0.8rem) clamp(0.5rem, 1.2cqw, 0.9rem);
+}
+
+.editor-preview .choice::before {
+  width: clamp(1rem, 1.8cqw, 1.5rem);
+  height: clamp(1rem, 1.8cqw, 1.5rem);
+}
+
+.preview-navigation {
+  position: sticky;
+  z-index: 20;
+  bottom: 0.75rem;
+  display: grid;
+  width: min(100%, 32rem);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  justify-self: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.preview-navigation > button {
+  width: 100%;
+  min-width: 0;
+}
+
+.preview-position {
+  min-width: 6.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
 }
 
 .slide-stage {
@@ -755,6 +834,27 @@ button.small {
 
 .slide-content li::marker {
   color: var(--highlight);
+}
+
+.slide-content li:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+  list-style: none;
+}
+
+.slide-content li > input[type="checkbox"] {
+  width: 1.1em;
+  height: 1.1em;
+  min-height: 0;
+  flex: 0 0 1.1em;
+  margin: 0.18em 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--highlight);
+  opacity: 1;
 }
 
 .slide-content blockquote {
@@ -933,7 +1033,7 @@ pre code {
 
 .audience-shell {
   display: grid;
-  width: min(100% - 2rem, 42rem);
+  width: min(100% - 2rem, 100rem);
   min-height: 100vh;
   align-content: center;
   gap: 1rem;
@@ -956,7 +1056,7 @@ pre code {
 
 .audience-slide-content {
   padding: 0;
-  font-size: 1rem;
+  font-size: clamp(1rem, 1.35vw, 1.35rem);
 }
 
 .hand-button.raised {
@@ -1639,8 +1739,16 @@ pre code {
   }
 
   .audience-shell {
-    width: min(100% - 1rem, 42rem);
+    width: calc(100% - 1rem);
     padding-block: 0.5rem 6.5rem;
+  }
+
+  .audience-slide {
+    padding: 1rem;
+  }
+
+  .audience-slide-content {
+    font-size: 1rem;
   }
 
   .presenter-toolbar {

@@ -28,24 +28,43 @@ struct LiveData {
 }
 
 pub fn preview(document: &DeckDocument, theme: &Theme, show_join_code: bool) -> String {
-    let Some(slide) = document.slides.first() else {
+    if document.slides.is_empty() {
         return "<div class=\"empty-state\">Nothing to preview yet.</div>".into();
-    };
-    let mut body = slide.html.clone();
-    if let Some(interaction) = &slide.interaction {
-        body.push_str(&preview_interaction(interaction));
     }
-    let code = if show_join_code {
-        "<div class=\"join-code\" style=\"position:absolute;right:2rem;top:2rem;font-size:1rem\">PREVIEW</div>"
+
+    let slides = document
+        .slides
+        .iter()
+        .enumerate()
+        .map(|(index, slide)| {
+            let mut body = slide.html.clone();
+            if let Some(interaction) = &slide.interaction {
+                body.push_str(&preview_interaction(interaction));
+            }
+            let code = if show_join_code {
+                "<div class=\"join-code\" style=\"position:absolute;right:2rem;top:2rem;font-size:1rem\">PREVIEW</div>"
+            } else {
+                ""
+            };
+            let active = if index == 0 { " active" } else { "" };
+            let current = if index == 0 { "true" } else { "false" };
+            format!(
+                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\"><div class=\"slide-content\">{code}{body}</div></article>"
+            )
+        })
+        .collect::<String>();
+    let next_disabled = if document.slides.len() == 1 {
+        " disabled"
     } else {
         ""
     };
+
     format!(
-        "<div style=\"{};width:100%\"><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{}{}</div></article></div><p style=\"text-align:center;color:var(--muted);margin:.75rem 0 0\">Slide 1 of {}</p></div>",
+        "<div class=\"editor-preview\" data-preview-deck data-slide-index=\"0\" style=\"{}\"><div class=\"slide-stage\">{slides}</div><nav class=\"preview-navigation\" aria-label=\"Preview slide navigation\"><button class=\"secondary\" type=\"button\" data-preview-nav=\"previous\" disabled>{}Previous</button><span class=\"preview-position\" data-preview-position aria-live=\"polite\">Slide 1 of {total}</span><button class=\"secondary\" type=\"button\" data-preview-nav=\"next\"{next_disabled}>Next{}</button></nav></div>",
         encode_double_quoted_attribute(&theme.style()),
-        code,
-        body,
-        document.slides.len(),
+        icon("previous"),
+        icon("next"),
+        total = document.slides.len(),
     )
 }
 
@@ -735,10 +754,33 @@ fn preview_interaction(spec: &Interaction) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ordering_response, ordering_results};
+    use crate::{
+        markdown::parse_deck,
+        models::{DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Theme},
+    };
+
+    use super::{ordering_response, ordering_results, preview};
 
     fn options() -> Vec<String> {
         ["First", "Second", "Third"].map(str::to_owned).to_vec()
+    }
+
+    #[test]
+    fn preview_contains_every_slide_and_navigation() {
+        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+        let theme = Theme {
+            font: "system".into(),
+            background: DEFAULT_THEME_BACKGROUND.into(),
+            text: DEFAULT_THEME_TEXT.into(),
+            accent: DEFAULT_THEME_ACCENT.into(),
+        };
+
+        let html = preview(&document, &theme, false);
+
+        assert_eq!(html.matches("data-preview-slide").count(), 2);
+        assert!(html.contains("data-preview-nav=\"previous\""));
+        assert!(html.contains("data-preview-nav=\"next\""));
+        assert!(html.contains("Slide 1 of 2"));
     }
 
     #[test]
