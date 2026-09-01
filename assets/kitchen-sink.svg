@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="title desc">
+  <title id="title">Interactive presentation illustration</title>
+  <desc id="desc">A presentation screen with a static bar chart, one audience cursor, and reaction buttons.</desc>
+  <rect width="960" height="320" rx="36" fill="#151616"/>
+  <rect x="70" y="40" width="560" height="240" rx="20" fill="#202121" stroke="#3c3d3b" stroke-width="4"/>
+  <rect x="112" y="82" width="210" height="18" rx="9" fill="#f2f2ef"/>
+  <rect x="112" y="118" width="330" height="10" rx="5" fill="#aaa9a4"/>
+  <rect x="112" y="172" width="88" height="62" rx="10" fill="#666763"/>
+  <rect x="218" y="146" width="88" height="88" rx="10" fill="#fab71c"/>
+  <rect x="324" y="194" width="88" height="40" rx="10" fill="#aaa9a4"/>
+  <rect x="430" y="132" width="88" height="102" rx="10" fill="#3c3d3b"/>
+  <path d="M706 80l68 36-29 16 20 38-22 12-20-39-30 16z" fill="#f2f2ef" stroke="#151616" stroke-width="5" stroke-linejoin="round"/>
+  <g font-family="system-ui, sans-serif" font-size="42" text-anchor="middle">
+    <g transform="translate(700 220)">
+      <rect width="76" height="64" rx="20" fill="#3c3d3b"/>
+      <text x="38" y="45">♥</text>
+    </g>
+    <g transform="translate(788 188)">
+      <rect width="76" height="64" rx="20" fill="#3c3d3b"/>
+      <text x="38" y="45">👍</text>
+    </g>
+    <g transform="translate(824 258)">
+      <rect width="76" height="64" rx="20" fill="#3c3d3b"/>
+      <text x="38" y="45">?</text>
+    </g>
+  </g>
+</svg>

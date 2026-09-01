@@ -1,0 +1,272 @@
+# Slides Markdown v1
+
+Status: draft specification of the format implemented by this repository.
+
+This document defines the portable authoring subset accepted by Slides. It distinguishes current behavior from possible future extensions so a deck does not accidentally depend on syntax the application cannot render.
+
+## Design goals
+
+Slides Markdown should be:
+
+- readable as ordinary Markdown;
+- predictable enough to validate before presenting;
+- explicit about presentation-only behavior;
+- safe to render from untrusted audience-facing content;
+- independent of a frontend framework;
+- evolvable without silently changing an existing deck.
+
+The format intentionally does not derive navigation from heading levels, execute raw HTML or JavaScript, or use list markers and image alt text as hidden presentation commands.
+
+## Document model
+
+A deck is UTF-8 Markdown containing one or more slides. Each slide contains:
+
+1. Markdown content; and
+2. at most one interaction block.
+
+Reactions are a session feature and require no authoring syntax.
+
+### Slide boundaries
+
+A line whose trimmed content is exactly `---` starts a new slide:
+
+```markdown
+# First slide
+
+---
+
+# Second slide
+```
+
+Leading and trailing whitespace on the separator line is allowed. Empty sections are ignored. Separators inside fenced code blocks are treated as code, not as slide boundaries:
+
+````markdown
+```text
+---
+```
+````
+
+Slides Markdown v1 has no YAML front matter. A leading `---` is therefore a slide separator, not a metadata delimiter.
+
+### Markdown profile
+
+The content parser supports CommonMark plus:
+
+- tables;
+- strikethrough;
+- task lists;
+- fenced and indented code blocks.
+
+The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text.
+
+Raw HTML is escaped and displayed as text. It is never executed. Link and image destinations may use:
+
+- relative paths;
+- `/`-absolute paths;
+- fragment identifiers;
+- `http` and `https` URLs;
+- `mailto` URLs.
+
+Other schemes are replaced with `#`.
+
+## Interaction blocks
+
+An interaction is a fenced container with an opening line, an optional body, and a closing line containing exactly `:::`:
+
+```markdown
+:::kind attribute="value" flag
+body
+:::
+```
+
+Interaction markers inside code fences are treated as code. Only one interaction block is allowed per slide.
+
+Attribute values are enclosed in double quotes. Slides Markdown v1 does not define an escape syntax inside an attribute value. Flags are bare, whitespace-separated words. Unsupported, duplicate, or malformed attributes and flags are validation errors.
+
+### Poll
+
+```markdown
+:::poll question="Which language do you use most?" multiple orientation="vertical"
+- Rust
+- Python
+- TypeScript
+:::
+```
+
+| Input | Required | Meaning |
+| --- | --- | --- |
+| `question="…"` | No | Prompt shown to the audience. Defaults to `Choose an option`. |
+| `multiple` | No | Allows more than one selected answer. |
+| `orientation="horizontal"` | No | Displays horizontal result bars. This is the default. |
+| `orientation="vertical"` | No | Displays vertical result bars. |
+| `- option` body lines | Yes | Defines answer options. At least two non-empty options are required. |
+
+Only top-level body lines beginning with `- ` define poll options.
+
+### Word cloud
+
+```markdown
+:::wordcloud prompt="Describe Rust in one word" max="80"
+:::
+```
+
+| Input | Required | Meaning |
+| --- | --- | --- |
+| `prompt="…"` | No | Prompt shown to the audience. Defaults to `What comes to mind?`. |
+| `max="N"` | No | Maximum answer length. Defaults to 80 and is normalized to the range 1–240. |
+
+A word-cloud block has no body in v1.
+
+### Quiz
+
+```markdown
+:::quiz question="Which type owns its text?"
+- [x] String
+- [ ] &str
+:::
+```
+
+| Input | Required | Meaning |
+| --- | --- | --- |
+| `question="…"` | No | Prompt shown to the audience. Defaults to `Choose the correct answer`. |
+| `- [x] answer` | Yes | Defines a correct answer. Uppercase `[X]` is also accepted. |
+| `- [ ] answer` | Yes | Defines an incorrect answer. |
+
+A quiz requires at least two non-empty checkbox options and at least one correct option. More than one answer may be marked correct.
+
+## Complete example
+
+````markdown
+# Ownership in Rust
+
+```rust
+fn consume(value: String) {
+    println!("{value}");
+}
+```
+
+---
+
+# Ask the audience
+
+:::poll question="Which language do you use most?" multiple orientation="horizontal"
+- Rust
+- Python
+- TypeScript
+- Go
+:::
+
+---
+
+# One word
+
+:::wordcloud prompt="Describe Rust in one word" max="80"
+:::
+
+---
+
+# Quick quiz
+
+:::quiz question="Which type owns its text?"
+- [x] String
+- [ ] &str
+:::
+````
+
+## Validation and compatibility
+
+Malformed supported interaction blocks make the deck invalid. Validation errors identify the one-based slide number. Unknown Markdown remains ordinary content unless a future format revision assigns it presentation semantics.
+
+Changes that alter the meaning of valid v1 source require a new format version. Additive parser changes must not reinterpret ordinary Markdown constructs such as headings, list marker choice, image alt text, or HTML comments.
+
+## Researched future extensions
+
+The following syntax is reserved for design work and is **not implemented in v1**:
+
+- global deck metadata with an explicit format version;
+- `:::notes` for presenter notes;
+- `:::steps` for incremental reveals;
+- `:::columns` and `:::column` for constrained layouts;
+- per-slide attributes for IDs, layouts, backgrounds, and classes;
+- code-fence attributes for line numbers and progressive highlighting;
+- explicit export policy for fragments, notes, and hidden slides.
+
+Dedicated fenced blocks are preferred over HTML comments, altered list markers, framework directives, or image-alt mini-languages. Unknown presentation directives should become validation errors once a versioned directive namespace exists.
+
+A likely future direction is:
+
+````markdown
+---
+format: slides/2
+title: Reliable presentations
+export:
+  fragments: final
+  notes: none
+---
+
+{#pipeline layout="two-column"}
+
+# Build pipeline
+
+:::steps
+- Parse Markdown
+- Validate directives and assets
+- Render deterministic output
+:::
+
+:::notes
+Explain why export policy belongs in the document model.
+:::
+````
+
+This example is illustrative and must not be used in a v1 deck.
+
+## Research notes
+
+The v1 shape and proposed evolution were compared with Marp, reveal.js/reveal-md, Slidev, Deckset, Pandoc, and remark.
+
+### Conventions worth keeping
+
+- `---` is the most widely understood explicit slide separator.
+- Plain Markdown should remain the content language.
+- Presentation semantics work best as explicit blocks or attributes.
+- Named layouts are more portable than arbitrary absolute positioning.
+- Notes, fragments, columns, and code-line emphasis are the most useful common extensions.
+- Export needs a deterministic policy rather than relying on whatever a browser happens to print.
+
+### Patterns intentionally avoided
+
+- Heading depth controlling slide hierarchy, because nested headings and containers can unexpectedly change navigation.
+- HTML comments serving as both notes and directives.
+- `*` and `-` list markers producing different presentation behavior.
+- Layout commands hidden in image alt text.
+- Runtime Vue components, arbitrary JavaScript, or raw HTML in the portable core.
+- Regex-configurable separators.
+- Browser-only PDF behavior without a pinned export environment.
+
+### Recurring complaints in existing tools
+
+Export fidelity dominates issue trackers:
+
+- Marp users request fragment-aware PDF/PPTX pages and editable PowerPoint output: [marp-cli #496](https://github.com/marp-team/marp-cli/issues/496), [#698](https://github.com/marp-team/marp-cli/issues/698), and [#673](https://github.com/marp-team/marp-cli/issues/673).
+- reveal.js has had fragment/MathJax and speaker-note printing regressions: [reveal.js #2256](https://github.com/hakimel/reveal.js/issues/2256) and [#3535](https://github.com/hakimel/reveal.js/issues/3535).
+- Slidev reports blank PDFs, Playwright-specific failures, and click-state mismatches: [Slidev #1240](https://github.com/slidevjs/slidev/issues/1240), [#2091](https://github.com/slidevjs/slidev/issues/2091), and [#2034](https://github.com/slidevjs/slidev/issues/2034).
+- remark's long-running [PDF export issue #50](https://github.com/gnab/remark/issues/50) contains reports of page-size, blank-output, background, crash, and browser-version problems.
+
+Syntax and layout are the next largest sources of friction:
+
+- reveal.js Markdown attributes have interfered with code and list parsing: [reveal.js #3067](https://github.com/hakimel/reveal.js/issues/3067).
+- General slide autoscaling and content overflow remain difficult in Marp: [marp-core #128](https://github.com/marp-team/marp-core/issues/128) and [#197](https://github.com/marp-team/marp-core/issues/197).
+- Pandoc's heading-derived slide levels and fenced containers have produced surprising nested navigation: [Pandoc #5168](https://github.com/jgm/pandoc/issues/5168) and [#8098](https://github.com/jgm/pandoc/issues/8098).
+- Local assets and offline builds need explicit handling: [marp-cli #393](https://github.com/marp-team/marp-cli/issues/393) and [Slidev discussion #2644](https://github.com/slidevjs/slidev/discussions/2644).
+
+Maintenance and portability also matter. [reveal-md](https://github.com/webpro/reveal-md) states that it is no longer in active development, while Slidev's Vue/component syntax trades portability for power. The portable core should therefore stay smaller than either framework.
+
+### Primary documentation
+
+- [Marp: How to write slides](https://marp.app/docs/guide/how-to-write-slides)
+- [reveal.js Markdown](https://revealjs.com/markdown/)
+- [Slidev syntax guide](https://sli.dev/guide/syntax)
+- [Deckset Markdown documentation](https://docs.deckset.com/markdownDocumentation.html)
+- [Pandoc slide shows](https://pandoc.org/MANUAL.html#slide-shows)
+- [remark Markdown](https://github.com/gnab/remark/wiki/Markdown)
