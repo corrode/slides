@@ -86,7 +86,7 @@ pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<D
 pub async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
     Ok(sqlx::query_as::<_, Deck>(
         r#"SELECT id, slug, title, draft_source, theme_font, theme_background,
-                  theme_text, theme_accent, show_join_code
+                  theme_text, theme_accent
            FROM decks WHERE id = ?"#,
     )
     .bind(id)
@@ -97,7 +97,7 @@ pub async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
 pub async fn deck_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<Deck>> {
     Ok(sqlx::query_as::<_, Deck>(
         r#"SELECT id, slug, title, draft_source, theme_font, theme_background,
-                  theme_text, theme_accent, show_join_code
+                  theme_text, theme_accent
            FROM decks WHERE slug = ?"#,
     )
     .bind(slug)
@@ -115,12 +115,11 @@ pub async fn save_deck(
     background: &str,
     text: &str,
     accent: &str,
-    show_join_code: bool,
 ) -> Result<()> {
     sqlx::query(
         r#"UPDATE decks
            SET title = ?, draft_source = ?, theme_font = ?, theme_background = ?,
-               theme_text = ?, theme_accent = ?, show_join_code = ?, updated_at = ?
+               theme_text = ?, theme_accent = ?, updated_at = ?
            WHERE id = ?"#,
     )
     .bind(title)
@@ -129,7 +128,6 @@ pub async fn save_deck(
     .bind(background)
     .bind(text)
     .bind(accent)
-    .bind(show_join_code)
     .bind(now_millis())
     .bind(id)
     .execute(pool)
@@ -147,14 +145,13 @@ pub async fn save_and_publish_deck(
     background: &str,
     text: &str,
     accent: &str,
-    show_join_code: bool,
 ) -> Result<i64> {
     let now = now_millis();
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"UPDATE decks
            SET title = ?, draft_source = ?, theme_font = ?, theme_background = ?,
-               theme_text = ?, theme_accent = ?, show_join_code = ?, updated_at = ?
+               theme_text = ?, theme_accent = ?, updated_at = ?
            WHERE id = ?"#,
     )
     .bind(title)
@@ -163,7 +160,6 @@ pub async fn save_and_publish_deck(
     .bind(background)
     .bind(text)
     .bind(accent)
-    .bind(show_join_code)
     .bind(now)
     .bind(deck_id)
     .execute(&mut *tx)
@@ -179,7 +175,7 @@ pub async fn save_and_publish_deck(
         r#"INSERT INTO deck_versions
            (deck_id, version_number, title, source, theme_font, theme_background,
             theme_text, theme_accent, show_join_code, published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"#,
     )
     .bind(deck_id)
     .bind(version_number)
@@ -189,7 +185,6 @@ pub async fn save_and_publish_deck(
     .bind(background)
     .bind(text)
     .bind(accent)
-    .bind(show_join_code)
     .bind(now)
     .execute(&mut *tx)
     .await?
@@ -201,7 +196,7 @@ pub async fn save_and_publish_deck(
 pub async fn latest_version(pool: &SqlitePool, deck_id: i64) -> Result<Option<DeckVersion>> {
     Ok(sqlx::query_as::<_, DeckVersion>(
         r#"SELECT id, deck_id, title, source, theme_font, theme_background,
-                  theme_text, theme_accent, show_join_code
+                  theme_text, theme_accent
            FROM deck_versions WHERE deck_id = ? ORDER BY version_number DESC LIMIT 1"#,
     )
     .bind(deck_id)
@@ -212,7 +207,7 @@ pub async fn latest_version(pool: &SqlitePool, deck_id: i64) -> Result<Option<De
 pub async fn get_version(pool: &SqlitePool, id: i64) -> Result<DeckVersion> {
     Ok(sqlx::query_as::<_, DeckVersion>(
         r#"SELECT id, deck_id, title, source, theme_font, theme_background,
-                  theme_text, theme_accent, show_join_code
+                  theme_text, theme_accent
            FROM deck_versions WHERE id = ?"#,
     )
     .bind(id)
@@ -654,7 +649,6 @@ mod tests {
             &deck.theme_background,
             &deck.theme_text,
             &deck.theme_accent,
-            deck.show_join_code,
         )
         .await
         .unwrap();

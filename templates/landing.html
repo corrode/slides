@@ -9,14 +9,14 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/">Slides</a>
-    <a class="button ghost small" href="/admin">Presenter</a>
+    <a class="button ghost small" href="/admin"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg>Presenter</a>
   </header>
   <main class="shell">
-    <div class="landing-grid" style="align-items:center;min-height:70vh">
+    <div class="landing-grid landing-hero">
       <section>
-        <p class="status-pill live">Interactive presentations</p>
+        <p class="eyebrow">Interactive presentations</p>
         <h1>Join the room.</h1>
-        <p style="max-width:38rem;color:var(--text-soft);font-size:1.15rem">Follow along, answer questions, and react from any browser.</p>
+        <p class="landing-intro">Follow along, answer questions, and react from any browser.</p>
       </section>
       <section class="panel">
         <h2>Enter the presentation code</h2>
@@ -24,7 +24,7 @@
           <label>Six-digit code
             <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="482731" required autofocus autocomplete="one-time-code">
           </label>
-          <button type="submit">Join presentation</button>
+          <button type="submit">Join presentation<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
         </form>
       </section>
     </div>

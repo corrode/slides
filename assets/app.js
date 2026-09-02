@@ -174,19 +174,14 @@
     }
   }
 
-  async function sharePresentation(button) {
+  async function copyPresentationLink(button) {
     const url = new URL(button.dataset.shareUrl, window.location.origin).href;
     const status = document.querySelector("#share-status");
     try {
-      if (navigator.share) {
-        await navigator.share({ title: document.title, url });
-        if (status) status.textContent = "Shared";
-      } else {
-        await copyText(url);
-        if (status) status.textContent = "Link copied";
-      }
-    } catch (error) {
-      if (error.name !== "AbortError" && status) status.textContent = "Could not share link";
+      await copyText(url);
+      if (status) status.textContent = "Link copied";
+    } catch {
+      if (status) status.textContent = "Could not copy link";
     }
   }
 
@@ -263,7 +258,7 @@
     }
     const share = event.target.closest("[data-share-url]");
     if (share) {
-      sharePresentation(share);
+      copyPresentationLink(share);
       return;
     }
     const move = event.target.closest("[data-order-move]");

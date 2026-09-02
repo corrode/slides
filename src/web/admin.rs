@@ -58,7 +58,6 @@ pub struct DeckForm {
     background: String,
     text: String,
     accent: String,
-    show_join_code: Option<String>,
 }
 
 pub async fn login_page(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
@@ -166,7 +165,7 @@ pub async fn editor(
         .await?
         .map(|session| session.code);
     let document = parse_deck(&deck.draft_source)?;
-    let initial_preview = render::preview(&document, &Theme::from(&deck), deck.show_join_code);
+    let initial_preview = render::preview(&document, &Theme::from(&deck));
     template(EditorTemplate {
         deck,
         published_versions,
@@ -184,11 +183,7 @@ pub async fn save(
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     let document = save_form(&state, deck.id, &form).await?;
-    let preview = render::preview(
-        &document,
-        &theme_from_form(&form),
-        form.show_join_code.is_some(),
-    );
+    let preview = render::preview(&document, &theme_from_form(&form));
     Ok(Html(format!(
         "<div id=\"notice\" hx-swap-oob=\"innerHTML\"></div><section id=\"preview\" hx-swap-oob=\"innerHTML\">{preview}</section>"
     ))
@@ -215,7 +210,6 @@ pub async fn publish(
         &form.background,
         &form.text,
         &form.accent,
-        form.show_join_code.is_some(),
     )
     .await?;
     if headers.contains_key("hx-request") {
@@ -264,7 +258,6 @@ async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult
         &form.background,
         &form.text,
         &form.accent,
-        form.show_join_code.is_some(),
     )
     .await?;
     Ok(document)

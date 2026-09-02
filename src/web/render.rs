@@ -27,7 +27,7 @@ struct LiveData {
     hand_raised: bool,
 }
 
-pub fn preview(document: &DeckDocument, theme: &Theme, show_join_code: bool) -> String {
+pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
     if document.slides.is_empty() {
         return "<div class=\"empty-state\">Nothing to preview yet.</div>".into();
     }
@@ -41,15 +41,11 @@ pub fn preview(document: &DeckDocument, theme: &Theme, show_join_code: bool) -> 
             if let Some(interaction) = &slide.interaction {
                 body.push_str(&preview_interaction(interaction));
             }
-            let code = if show_join_code {
-                "<div class=\"join-code\" style=\"position:absolute;right:2rem;top:2rem;font-size:1rem\">PREVIEW</div>"
-            } else {
-                ""
-            };
+
             let active = if index == 0 { " active" } else { "" };
             let current = if index == 0 { "true" } else { "false" };
             format!(
-                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\"><div class=\"slide-content\">{code}{body}</div></article>"
+                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\"><div class=\"slide-content\">{body}</div></article>"
             )
         })
         .collect::<String>();
@@ -128,7 +124,14 @@ pub async fn live(
 
     Ok(match view {
         LiveView::Presenter => presenter_view(session, version, document, slide, index, &data),
-        LiveView::Audience => audience_view(session, slide, index, document.slides.len(), &data),
+        LiveView::Audience => audience_view(
+            session,
+            &version.title,
+            slide,
+            index,
+            document.slides.len(),
+            &data,
+        ),
     })
 }
 
@@ -146,10 +149,10 @@ fn presenter_view(
     } else {
         ""
     };
-    let (lock_label, lock_icon, status) = if session.locked {
-        ("Allow free navigation", "unlock", "Future slides locked")
+    let (lock_label, lock_icon) = if session.locked {
+        ("Unlock navigation", "unlock")
     } else {
-        ("Prevent future slides", "lock", "Free navigation")
+        ("Lock navigation", "lock")
     };
     let interaction = slide
         .interaction
@@ -164,14 +167,7 @@ fn presenter_view(
             )
         })
         .unwrap_or_default();
-    let code_on_slide = if version.show_join_code {
-        format!(
-            "<div class=\"join-code presenter-code\">{}</div>",
-            session.code
-        )
-    } else {
-        String::new()
-    };
+
     let interaction_controls = if slide.interaction.is_some() {
         let action = if session.interaction_open {
             "close"
@@ -179,12 +175,12 @@ fn presenter_view(
             "open"
         };
         let label = if session.interaction_open {
-            "Close responses"
+            "Close voting"
         } else {
-            "Open responses"
+            "Open voting"
         };
         format!(
-            "<form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{}\"><button class=\"secondary small\" type=\"submit\">{}{}</button></form><form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"reveal\"><button class=\"secondary small\" type=\"submit\">{}Reveal results</button></form>",
+            "<form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{}\"><button class=\"secondary small\" type=\"submit\">{}{}</button></form><form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"reveal\"><button class=\"secondary small\" type=\"submit\">{}Reveal</button></form>",
             session.code,
             action,
             icon("responses"),
@@ -198,12 +194,12 @@ fn presenter_view(
     let hand_signal = presenter_hand_signal(&session.code, data.raised_hands);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\"><div class=\"presenter-status\"><span class=\"status-pill live\">Live</span><strong>{title}</strong><span>{position}/{total}</span><span class=\"status-pill\">{status}</span></div><div class=\"presenter-actions\"><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Share</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{code_on_slide}{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div><nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a><span class=\"status-pill live\">Live</span><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\"><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div><nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
         code = session.code,
-        share_icon = icon("share"),
+        share_icon = icon("copy"),
         lock_icon_markup = icon(lock_icon),
         end_icon = icon("end"),
         slide_html = slide.html,
@@ -216,6 +212,7 @@ fn presenter_view(
 
 fn audience_view(
     session: &LiveSession,
+    title: &str,
     slide: &Slide,
     index: usize,
     slide_count: usize,
@@ -230,8 +227,9 @@ fn audience_view(
     let navigation = audience_navigation(session, index, slide_count);
     let following_presenter = index == session.current_slide as usize;
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><div class=\"audience-status\"><span class=\"status-pill live\">Live · {code}</span><span class=\"status-pill\">Slide {position}</span></div><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><span class=\"status-pill live\">Live</span><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
+        title = encode_text(title),
         position = index + 1,
         slide_html = slide.html,
         hand_button = audience_hand_button(&session.code, data.hand_raised),
@@ -680,8 +678,8 @@ fn icon(name: &str) -> &'static str {
         "attention" => {
             "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4\"/></svg>"
         }
-        "share" => {
-            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"18\" cy=\"5\" r=\"2\"/><circle cx=\"6\" cy=\"12\" r=\"2\"/><circle cx=\"18\" cy=\"19\" r=\"2\"/><path d=\"m8 11 8-5M8 13l8 5\"/></svg>"
+        "copy" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect x=\"8\" y=\"8\" width=\"11\" height=\"11\" rx=\"2\"/><path d=\"M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2\"/></svg>"
         }
         "lock" => {
             "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect x=\"5\" y=\"10\" width=\"14\" height=\"11\" rx=\"2\"/><path d=\"M8 10V7a4 4 0 0 1 8 0v3\"/></svg>"
@@ -756,10 +754,15 @@ fn preview_interaction(spec: &Interaction) -> String {
 mod tests {
     use crate::{
         markdown::parse_deck,
-        models::{DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Theme},
+        models::{
+            DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, DeckVersion,
+            LiveSession, Theme,
+        },
     };
 
-    use super::{ordering_response, ordering_results, preview};
+    use super::{
+        LiveData, audience_view, ordering_response, ordering_results, presenter_view, preview,
+    };
 
     fn options() -> Vec<String> {
         ["First", "Second", "Third"].map(str::to_owned).to_vec()
@@ -775,12 +778,58 @@ mod tests {
             accent: DEFAULT_THEME_ACCENT.into(),
         };
 
-        let html = preview(&document, &theme, false);
+        let html = preview(&document, &theme);
 
         assert_eq!(html.matches("data-preview-slide").count(), 2);
         assert!(html.contains("data-preview-nav=\"previous\""));
         assert!(html.contains("data-preview-nav=\"next\""));
         assert!(html.contains("Slide 1 of 2"));
+    }
+
+    #[test]
+    fn live_toolbars_keep_essential_context_and_actions() {
+        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+        let version = DeckVersion {
+            id: 1,
+            title: "A useful deck".into(),
+            source: String::new(),
+            theme_font: "system".into(),
+            theme_background: DEFAULT_THEME_BACKGROUND.into(),
+            theme_text: DEFAULT_THEME_TEXT.into(),
+            theme_accent: DEFAULT_THEME_ACCENT.into(),
+        };
+        let session = LiveSession {
+            id: 1,
+            deck_version_id: 1,
+            code: "553675".into(),
+            current_slide: 0,
+            locked: true,
+            interaction_open: true,
+            results_revealed: false,
+            follow_revision: 0,
+            ended_at: None,
+        };
+        let data = LiveData::default();
+
+        let presenter =
+            presenter_view(&session, &version, &document, &document.slides[0], 0, &data);
+        assert!(presenter.contains("class=\"presenter-toolbar\""));
+        assert!(presenter.contains("Join code</span><strong>553675"));
+        assert!(presenter.contains("Copy link"));
+        assert!(!presenter.contains("presenter-code"));
+        assert!(!presenter.contains("Future slides locked"));
+
+        let audience = audience_view(
+            &session,
+            &version.title,
+            &document.slides[0],
+            0,
+            document.slides.len(),
+            &data,
+        );
+        assert!(audience.contains("class=\"audience-toolbar\""));
+        assert!(audience.contains("class=\"nav-title\">A useful deck"));
+        assert!(audience.contains("class=\"nav-position\">1/2"));
     }
 
     #[test]

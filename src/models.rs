@@ -12,7 +12,6 @@ pub struct Deck {
     pub theme_background: String,
     pub theme_text: String,
     pub theme_accent: String,
-    pub show_join_code: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -32,7 +31,6 @@ pub struct DeckVersion {
     pub theme_background: String,
     pub theme_text: String,
     pub theme_accent: String,
-    pub show_join_code: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

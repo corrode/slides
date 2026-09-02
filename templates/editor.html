@@ -12,11 +12,10 @@
   <header class="topbar">
     <a class="brand" href="/admin">Slides</a>
     <div>
-      <span class="status-pill">{{ published_versions }} published</span>
       {% match active_code %}
-        {% when Some with (code) %}<a class="button secondary small" href="/present/{{ code }}">Return to live session</a>
+        {% when Some with (code) %}<a class="button secondary small" href="/present/{{ code }}"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg>Live session</a>
         {% when None %}
-          {% if published_versions > 0 %}<form method="post" action="/admin/decks/{{ deck.slug }}/sessions" style="display:inline"><button class="secondary small" type="submit">Start presenting</button></form>{% endif %}
+          {% if published_versions > 0 %}<form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/sessions"><button class="secondary small" type="submit"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>Start presenting</button></form>{% endif %}
       {% endmatch %}
     </div>
   </header>
@@ -31,7 +30,7 @@
           </label>
           <details>
             <summary>Theme and display</summary>
-            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;margin-top:1rem">
+            <div class="theme-fields">
               <label>Font
                 <select name="font">
                   <option value="system"{% if deck.theme_font == "system" %} selected{% endif %}>System sans</option>
@@ -43,13 +42,10 @@
               <label>Text <input type="color" name="text" value="{{ deck.theme_text }}"></label>
               <label>Accent <input type="color" name="accent" value="{{ deck.theme_accent }}"></label>
             </div>
-            <label style="display:flex;grid-template-columns:auto 1fr;align-items:center;margin-top:1rem"><input style="width:auto" type="checkbox" name="show_join_code" value="yes"{% if deck.show_join_code %} checked{% endif %}> Show the join code on slides</label>
           </details>
-          <div style="display:flex;flex-wrap:wrap;gap:.6rem">
-            <button class="ghost" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice">Publish version</button>
-          </div>
+          <button class="ghost editor-publish" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6"/></svg>Publish version</button>
         </form>
-        <details style="margin-top:1rem">
+        <details class="editor-examples">
           <summary>Interactive Markdown examples</summary>
           <pre><code>:::poll question=&quot;Which do you prefer?&quot; multiple orientation=&quot;horizontal&quot;
 - Rust
