@@ -1,0 +1,21 @@
+[package]
+name = "slides-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.slides]
+path = ".."
+
+[[bin]]
+name = "parse_deck"
+path = "fuzz_targets/parse_deck.rs"
+test = false
+doc = false
+bench = false
