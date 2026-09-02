@@ -636,8 +636,8 @@ mod tests {
         assert_eq!(deck.theme_text, DEFAULT_THEME_TEXT);
         assert_eq!(deck.theme_accent, DEFAULT_THEME_ACCENT);
         let theme_style = Theme::from(&deck).style();
-        assert!(theme_style.contains("--surface:#202121"));
-        assert!(theme_style.contains("--highlight:#fab71c"));
+        assert!(theme_style.contains("--surface:#181825"));
+        assert!(theme_style.contains("--highlight:#f9e2af"));
         assert!(!theme_style.contains("gradient"));
 
         let version_id = save_and_publish_deck(

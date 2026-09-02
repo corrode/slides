@@ -7,39 +7,39 @@
   --font-display: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 
-  --bg: #151616;
-  --bg-deep: #151616;
-  --surface: #1d1e1e;
-  --surface-raised: #232424;
-  --surface-soft: #2b2c2a;
-  --surface-hover: #272826;
-  --border: #30312f;
-  --border-strong: #4b4c48;
+  --bg: #1e1e2e;
+  --bg-deep: #11111b;
+  --surface: #181825;
+  --surface-raised: #313244;
+  --surface-soft: #45475a;
+  --surface-hover: #585b70;
+  --border: #45475a;
+  --border-strong: #585b70;
 
-  --text: #f2f2ef;
-  --text-soft: #d2d2ce;
-  --muted: #aaa9a4;
-  --muted-strong: #c8c8c3;
+  --text: #cdd6f4;
+  --text-soft: #bac2de;
+  --muted: #9399b2;
+  --muted-strong: #a6adc8;
 
-  --accent: #f1f1ed;
-  --accent-bright: #f1f1ed;
-  --accent-deep: #d0d0cb;
-  --highlight: #fab71c;
+  --accent: #b4befe;
+  --accent-bright: #cba6f7;
+  --accent-deep: #89b4fa;
+  --highlight: #f9e2af;
 
-  --success: #8fd5a9;
-  --success-soft: #203128;
-  --danger: #ff8f86;
-  --danger-soft: #382524;
-  --info: #b9c7d5;
-  --info-soft: #252b30;
+  --success: #a6e3a1;
+  --success-soft: rgb(166 227 161 / 14%);
+  --danger: #f38ba8;
+  --danger-soft: rgb(243 139 168 / 14%);
+  --info: #89b4fa;
+  --info-soft: rgb(137 180 250 / 14%);
 
-  --syntax-comment: #7f8998;
-  --syntax-keyword: #e58e96;
-  --syntax-string: #b9d27c;
-  --syntax-number: #ddae73;
-  --syntax-function: #82bce5;
-  --syntax-type: #c4a7e7;
-  --syntax-variable: #e5d7bb;
+  --syntax-comment: #6c7086;
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-function: #89b4fa;
+  --syntax-type: #f9e2af;
+  --syntax-variable: #cdd6f4;
 
   --radius-sm: 0.45rem;
   --radius-md: 0.65rem;
@@ -77,7 +77,7 @@ body {
 
 ::selection {
   background: var(--highlight);
-  color: #171817;
+  color: #11111b;
 }
 
 a {
@@ -170,7 +170,7 @@ button,
 .audience-toolbar {
   min-height: var(--topbar-height);
   border-bottom: 1px solid var(--border);
-  background: rgb(21 22 22 / 94%);
+  background: color-mix(in srgb, var(--bg-deep) 94%, transparent);
   backdrop-filter: blur(14px);
 }
 
@@ -439,7 +439,7 @@ button,
 }
 
 .create-popover::backdrop {
-  background: rgb(21 22 22 / 92%);
+  background: rgb(17 17 27 / 92%);
 }
 
 .create-popover > header {
@@ -559,7 +559,7 @@ button,
   border: 1px solid transparent;
   border-radius: 999px;
   background: var(--accent);
-  color: #171817;
+  color: #11111b;
   cursor: pointer;
   font-weight: 750;
   line-height: 1.1;
@@ -570,7 +570,7 @@ button,
 button:hover:not(:disabled),
 .button:hover:not([aria-disabled="true"]) {
   border-color: transparent;
-  color: #171817;
+  color: #11111b;
 }
 
 button:active:not(:disabled),
@@ -616,7 +616,7 @@ button.danger {
   border-color: transparent;
   background: var(--danger-soft);
   box-shadow: none;
-  color: #ffadad;
+  color: var(--danger);
 }
 
 .button.small,
@@ -692,7 +692,6 @@ button.small {
   gap: 0.8rem;
   margin-top: 1rem;
 }
-
 
 .editor-publish {
   justify-self: start;
@@ -881,8 +880,8 @@ pre {
 code {
   padding: 0.12em 0.34em;
   border-radius: 0.3em;
-  background: #090c11;
-  color: #f0d398;
+  background: #11111b;
+  color: var(--highlight);
   font-size: 0.9em;
 }
 
@@ -892,7 +891,7 @@ pre {
   margin: 1rem 0;
   padding: 1rem 1.1rem;
   border-radius: var(--radius-md);
-  background: #111212;
+  background: #181825;
   color: var(--syntax-variable);
   font-size: 0.88em;
   line-height: 1.6;
@@ -965,22 +964,6 @@ pre code {
   color: var(--syntax-variable);
 }
 
-.join-code {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25em 0.55em;
-  border-radius: 999px;
-  background: var(--surface-soft);
-  color: var(--highlight);
-  font-family: var(--font-mono);
-  font-size: clamp(1.65rem, 5vw, 4.2rem);
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  line-height: 1;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
 
 .presenter-shell {
   display: flex;
@@ -1099,7 +1082,7 @@ pre code {
   align-content: center;
   gap: 1rem;
   margin-inline: auto;
-  padding-block: calc(var(--topbar-height) + 2rem) 7rem;
+  padding-block: calc(var(--topbar-height) + 2rem) 11rem;
 }
 
 .audience-toolbar {
@@ -1120,8 +1103,26 @@ pre code {
 }
 
 .audience-actions {
+  position: fixed;
+  z-index: 75;
+  right: 50%;
+  bottom: 5.4rem;
+  width: max-content;
+  max-width: calc(100% - 1rem);
   justify-content: center;
-  flex-wrap: wrap;
+  overflow-x: auto;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(14px);
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  transform: translateX(50%);
+}
+
+.audience-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .audience-slide-content {
@@ -1129,9 +1130,23 @@ pre code {
   font-size: clamp(1rem, 1.35vw, 1.35rem);
 }
 
-.hand-button.raised {
-  background: var(--surface-soft);
-  color: var(--highlight);
+.hand-button.raised,
+.hand-button.raised:hover:not(:disabled) {
+  border-color: var(--highlight);
+  background: var(--highlight);
+  color: #11111b;
+  animation: raised-hand-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes raised-hand-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.035);
+  }
 }
 
 .interaction {
@@ -1456,7 +1471,7 @@ pre code {
   padding: 0.35rem;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgb(29 30 30 / 94%);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
   transform: translateX(50%);
 }
 
@@ -1474,16 +1489,16 @@ pre code {
 
 .attention-control {
   background: var(--highlight);
-  color: #171817;
+  color: #11111b;
 }
 
 .attention-control:hover:not(:disabled) {
-  background: #e7a814;
-  color: #171817;
+  background: #fab387;
+  color: #11111b;
 }
 
 .attention-control:active:not(:disabled) {
-  background: #cf940b;
+  background: #eba0ac;
 }
 
 .question-signal {
@@ -1494,8 +1509,8 @@ pre code {
 }
 
 .question-signal button {
-  background: #6d2424;
-  color: #fff;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .reaction-feed {
@@ -1618,8 +1633,8 @@ pre code {
 }
 
 .status-pill.live {
-  background: #3a2020;
-  color: #ff8178;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .presenter-toolbar .status-pill.live::before,
@@ -1690,7 +1705,7 @@ pre code {
   padding: 0.8rem 0.95rem;
   border-left: 2px solid currentColor;
   background: var(--info-soft);
-  color: #bed8f3;
+  color: var(--info);
 }
 
 .notice::before,
@@ -1708,9 +1723,8 @@ pre code {
 
 .error {
   background: var(--danger-soft);
-  color: #ffb4b4;
+  color: var(--danger);
 }
-
 
 @media (max-width: 75rem) {
   .presenter-toolbar {
@@ -1848,7 +1862,7 @@ pre code {
 
   .audience-shell {
     width: calc(100% - 1rem);
-    padding-block: calc(var(--topbar-height) + 1rem) 6.5rem;
+    padding-block: calc(var(--topbar-height) + 1rem) 10.5rem;
   }
 
   .audience-slide {
@@ -1902,11 +1916,6 @@ pre code {
     font-size: 0.78rem;
   }
 
-
-  .join-code {
-    max-width: 100%;
-    letter-spacing: 0.08em;
-  }
 }
 
 @media (max-width: 30rem) {
@@ -1935,10 +1944,6 @@ pre code {
 
   .presenter-toolbar > * {
     width: auto;
-  }
-
-  .audience-toolbar .status-pill {
-    display: none;
   }
 
   .audience-toolbar .nav-title {
@@ -2003,6 +2008,9 @@ pre code {
 
   .topbar,
   .presenter-toolbar,
+  .audience-toolbar,
+  .audience-actions,
+  .presentation-navigation,
   .editor-pane,
   .reactions,
   button,
@@ -2085,7 +2093,6 @@ pre code {
 
   .bar-fill,
   .vertical-bar,
-  .join-code,
   .status-pill {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;

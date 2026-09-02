@@ -1,6 +1,6 @@
-pub const DEFAULT_THEME_BACKGROUND: &str = "#151616";
-pub const DEFAULT_THEME_TEXT: &str = "#f2f2ef";
-pub const DEFAULT_THEME_ACCENT: &str = "#fab71c";
+pub const DEFAULT_THEME_BACKGROUND: &str = "#1e1e2e";
+pub const DEFAULT_THEME_TEXT: &str = "#cdd6f4";
+pub const DEFAULT_THEME_ACCENT: &str = "#f9e2af";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Deck {
@@ -64,16 +64,21 @@ impl Theme {
         let is_default = self.background == DEFAULT_THEME_BACKGROUND
             && self.text == DEFAULT_THEME_TEXT
             && self.accent == DEFAULT_THEME_ACCENT;
-        let surface = if is_default {
-            "#202121"
+        let background_deep = if is_default {
+            "#11111b"
         } else {
             &self.background
         };
-        let text_soft = if is_default { "#aaa9a4" } else { &self.text };
+        let surface = if is_default {
+            "#181825"
+        } else {
+            &self.background
+        };
+        let text_soft = if is_default { "#bac2de" } else { &self.text };
 
         format!(
-            "--font-display:{font};--font-sans:{font};--bg:{};--bg-deep:{};--surface:{};--text:{};--text-soft:{};--highlight:{}",
-            self.background, self.background, surface, self.text, text_soft, self.accent,
+            "--font-display:{font};--font-sans:{font};--bg:{};--bg-deep:{background_deep};--surface:{surface};--text:{};--text-soft:{text_soft};--highlight:{}",
+            self.background, self.text, self.accent,
         )
     }
 }

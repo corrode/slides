@@ -41,7 +41,6 @@ pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
             if let Some(interaction) = &slide.interaction {
                 body.push_str(&preview_interaction(interaction));
             }
-
             let active = if index == 0 { " active" } else { "" };
             let current = if index == 0 { "true" } else { "false" };
             format!(
@@ -167,7 +166,6 @@ fn presenter_view(
             )
         })
         .unwrap_or_default();
-
     let interaction_controls = if slide.interaction.is_some() {
         let action = if session.interaction_open {
             "close"
@@ -227,7 +225,7 @@ fn audience_view(
     let navigation = audience_navigation(session, index, slide_count);
     let following_presenter = index == session.current_slide as usize;
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><span class=\"status-pill live\">Live</span><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><span class=\"status-pill live\">Live</span></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
@@ -816,7 +814,6 @@ mod tests {
         assert!(presenter.contains("class=\"presenter-toolbar\""));
         assert!(presenter.contains("Join code</span><strong>553675"));
         assert!(presenter.contains("Copy link"));
-        assert!(!presenter.contains("presenter-code"));
         assert!(!presenter.contains("Future slides locked"));
 
         let audience = audience_view(
@@ -830,6 +827,8 @@ mod tests {
         assert!(audience.contains("class=\"audience-toolbar\""));
         assert!(audience.contains("class=\"nav-title\">A useful deck"));
         assert!(audience.contains("class=\"nav-position\">1/2"));
+        assert!(!audience.contains("Join code"));
+        assert!(audience.contains("</div><span class=\"status-pill live\">Live</span></nav>"));
     }
 
     #[test]
