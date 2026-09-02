@@ -71,7 +71,7 @@ Use the reaction bar whenever something is:
 
 # Coffee or beer?
 
-:::poll question="" orientation="horizontal"
+:::poll
 - Coffee
 - Beer
 :::
@@ -80,7 +80,7 @@ Use the reaction bar whenever something is:
 
 # Cats or dogs?
 
-:::poll question="" orientation="horizontal"
+:::poll
 - Cats 🐈
 - Dogs 🐕
 :::
@@ -156,7 +156,7 @@ It's a bit like `uv`.
 
 ---
 
-# Our tiny task
+# Example task
 
 Given a filename, return its **total word count**.
 
@@ -189,7 +189,8 @@ def count_words(filename):
     return len(text.split())
 ```
 
-Simple—and correct for the happy path.
+Simple and correct (for the happy path).  
+...but what happens if we don't close the file?
 
 ---
 
@@ -216,11 +217,19 @@ def count_words(filename):
     return len(text.split())
 ```
 
-Now the file closes when the block ends—even on failure.
+Now the file closes when the block ends; even on failure.
 
 ---
 
-# Files can be missing
+# What happens if files are missing?
+
+- Exception!
+- Who catches that?
+- Our entire program could crash.
+
+---
+
+# Handle missing files
 
 ```python
 def count_words(filename):
@@ -235,7 +244,7 @@ def count_words(filename):
 
 ---
 
-# Then reality arrives
+# More problems
 
 What if the path is…
 
@@ -244,7 +253,7 @@ What if the path is…
 - not valid UTF-8?
 - much larger than memory?
 
-None of this is Rust-specific. These were always part of the task.
+**The complexity was always there but Python hides it.**
 
 ---
 
@@ -268,7 +277,7 @@ def count_words(filename):
 
 ---
 
-# What does `0` mean now?
+# Wait, what does `0` mean?
 
 - The file was empty
 - The file did not exist
@@ -276,7 +285,18 @@ def count_words(filename):
 - Permission was denied
 - The bytes were not valid UTF-8
 
-We handled the errors—and erased the difference between them.
+We handled the errors, but we erased the difference between them.
+
+---
+
+# And what about large files?
+
+```python
+text = file.read()
+```
+
+- This leads the entire file into memory
+- Can you handle a 1 petabyte file?
 
 ---
 
@@ -309,7 +329,7 @@ don't        state-of-the-art        🦀
 中文没有空格
 ```
 
-`split()` is a policy decision, not a universal definition.
+How does `split()` handle these? 
 
 ---
 
@@ -349,7 +369,7 @@ error[E0599]: no method named `split_whitespace`
 found for enum `Result` in the current scope
 ```
 
-`read_to_string` did not return text.
+`read_to_string` did not return text!
 
 It returned either text **or an I/O error**.
 
@@ -361,16 +381,16 @@ It returned either text **or an I/O error**.
 use std::fs;
 
 fn count_words(filename: &str) -> usize {
-    let text = fs::read_to_string(filename).unwrap();
+    let text = fs::read_to_string(filename).unwrap(); // 🔥
     text.split_whitespace().count()
 }
 ```
 
-This runs—but a missing or invalid file now panics.
+This works, but a missing or invalid file now panics (i.e., halt and catch fire).
 
 ---
 
-# Better: preserve failure
+# Handle errors or return them
 
 ```rust
 use std::{fs, io};
@@ -387,25 +407,27 @@ fn count_words(filename: &str) -> io::Result<usize> {
 
 # The return type tells the truth
 
-```text
-Ok(8)                 eight words
-Ok(0)                 an empty file
-Err(NotFound)         no file there
-Err(PermissionDenied) cannot read it
-Err(InvalidData)      not valid UTF-8
+```rust
+Ok(8)                 // eight words
+Ok(0)                 // an empty file
+Err(NotFound)         // no file there
+Err(PermissionDenied) // cannot read it
+Err(InvalidData)      // not valid UTF-8
 ```
 
-The caller decides what each failure should mean.
+No fake `0` value. The caller can decide how to handle each scenario. 
 
 ---
 
 # Where is `close()`?
 
-There isn't one.
+There isn't one!
 
-`File` owns the operating-system file handle. When the value leaves scope, Rust drops it and closes the handle—even when `?` returns early.
+`File` **owns** the operating-system file handle. When the value leaves scope, Rust drops it and closes the handle. **Even when `?` returns early.**
 
-This pattern is called **RAII**: resource acquisition is initialization.
+No leaking memory, no dangling pointers.
+
+This is why Rust is so powerful.
 
 ---
 

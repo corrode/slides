@@ -21,6 +21,12 @@ pub struct ValueCount {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WordCloudResponse {
+    pub value: String,
+    pub participant_hash: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ReactionCount {
     pub kind: String,
     pub count: i64,
@@ -481,6 +487,22 @@ pub async fn value_counts(
     .await?)
 }
 
+pub async fn word_cloud_responses(
+    pool: &SqlitePool,
+    session_id: i64,
+    slide_index: usize,
+) -> Result<Vec<WordCloudResponse>> {
+    Ok(sqlx::query_as::<_, WordCloudResponse>(
+        r#"SELECT value, participant_hash FROM responses
+           WHERE session_id = ? AND slide_index = ? AND kind = 'wordcloud'
+           ORDER BY created_at, id"#,
+    )
+    .bind(session_id)
+    .bind(slide_index as i64)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn answerer_count(pool: &SqlitePool, session_id: i64, slide_index: usize) -> Result<i64> {
     Ok(sqlx::query_scalar(
         "SELECT COUNT(DISTINCT participant_hash) FROM responses WHERE session_id = ? AND slide_index = ?",
@@ -658,6 +680,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(answerer_count(&pool, session.id, 0).await.unwrap(), 1);
+
+        replace_answer(&pool, session.id, 2, "participant", "wordcloud", "Hiking")
+            .await
+            .unwrap();
+        let word_cloud = word_cloud_responses(&pool, session.id, 2).await.unwrap();
+        assert_eq!(word_cloud.len(), 1);
+        assert_eq!(word_cloud[0].value, "Hiking");
+        assert_eq!(word_cloud[0].participant_hash, "participant");
+
         assert!(
             add_reaction(&pool, session.id, 0, "participant", "applause")
                 .await

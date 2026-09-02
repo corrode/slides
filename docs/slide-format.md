@@ -95,13 +95,22 @@ Attribute values are enclosed in double quotes. Slides Markdown v1 does not defi
 
 | Input | Required | Meaning |
 | --- | --- | --- |
-| `question="…"` | No | Prompt shown to the audience. Defaults to `Choose an option`. |
+| `question="…"` | No | Optional prompt shown above the choices. Omitted or empty values render no prompt. |
 | `multiple` | No | Allows more than one selected answer. |
 | `orientation="horizontal"` | No | Displays horizontal result bars. This is the default. |
 | `orientation="vertical"` | No | Displays vertical result bars. |
 | `- option` body lines | Yes | Defines answer options. At least two non-empty options are required. |
 
-Only top-level body lines beginning with `- ` define poll options.
+Only top-level body lines beginning with `- ` define poll options. The orientation defaults to horizontal, so a slide heading followed by a minimal poll is valid:
+
+```markdown
+# Coffee or beer?
+
+:::poll
+- Coffee
+- Beer
+:::
+```
 
 ### Word cloud
 

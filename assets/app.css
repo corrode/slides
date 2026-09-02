@@ -813,6 +813,47 @@ button.small {
   margin-bottom: 0;
 }
 
+.slide-content:has(> p:first-child > img:only-child) {
+  position: relative;
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.slide-content:has(> p:first-child > img:only-child)::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 45%, rgb(0 0 0 / 75%));
+  content: "";
+  pointer-events: none;
+}
+
+.slide-content:has(> p:first-child > img:only-child) > p:first-child {
+  position: absolute;
+  inset: 0;
+  max-width: none;
+  margin: 0;
+}
+
+.slide-content:has(> p:first-child > img:only-child) > p:first-child img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.slide-content:has(> p:first-child > img:only-child) > :not(p:first-child) {
+  position: relative;
+  z-index: 2;
+  margin-right: clamp(1.5rem, 5vw, 5.5rem);
+  margin-left: clamp(1.5rem, 5vw, 5.5rem);
+  color: #fff;
+  text-shadow: 0 0.08em 0.3em rgb(0 0 0 / 65%);
+}
+
+.slide-content:has(> p:first-child > img:only-child) > :last-child {
+  margin-bottom: clamp(1.5rem, 5vw, 5.5rem);
+}
+
 .slide-content h1 {
   max-width: 18ch;
   margin-bottom: 0.45em;
@@ -837,6 +878,10 @@ button.small {
   gap: 0.45em;
   margin: 0;
   padding-left: 1.25em;
+}
+
+.slide-content :is(ul, ol) + p {
+  margin-top: 1em;
 }
 
 .slide-content li::marker {
@@ -1143,6 +1188,10 @@ pre code {
   font-size: clamp(1rem, 1.35vw, 1.35rem);
 }
 
+.audience-slide-content:has(> p:first-child > img:only-child) {
+  min-height: clamp(20rem, calc(100vh - var(--topbar-height) - 13rem), 50rem);
+}
+
 .hand-button.raised,
 .hand-button.raised:hover:not(:disabled) {
   border-color: var(--highlight);
@@ -1442,19 +1491,17 @@ pre code {
 }
 
 .word-cloud > * {
-  color: var(--text-soft);
+  color: var(--word-color, var(--text-soft));
   font-family: var(--font-display);
   font-size: calc(0.82rem + var(--weight, 1) * 0.32rem);
   font-weight: calc(520 + var(--weight, 1) * 45);
   line-height: 1;
-}
-
-.word-cloud > :nth-child(3n + 1) {
-  color: var(--highlight);
+  transition: filter 160ms ease, transform 160ms ease;
 }
 
 .word-cloud > *:hover {
-  color: var(--text);
+  filter: brightness(1.15);
+  transform: scale(1.04);
 }
 
 .reactions {

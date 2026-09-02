@@ -82,7 +82,24 @@
     });
   }
 
-  function showPreviewSlide(deck, requestedIndex) {
+  function previewIndexFromUrl() {
+    const match = window.location.hash.match(/^#slide-(\d+)$/);
+    if (!match) return null;
+    const slideNumber = Number.parseInt(match[1], 10);
+    return Number.isNaN(slideNumber) ? null : slideNumber - 1;
+  }
+
+  function updatePreviewUrl(index) {
+    const hash = `#slide-${index + 1}`;
+    if (window.location.hash === hash) return;
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${window.location.search}${hash}`,
+    );
+  }
+
+  function showPreviewSlide(deck, requestedIndex, updateUrl = true) {
     const slides = [...deck.querySelectorAll("[data-preview-slide]")];
     if (slides.length === 0) return;
     const index = Math.max(0, Math.min(requestedIndex, slides.length - 1));
@@ -98,6 +115,7 @@
     if (next) next.disabled = index + 1 === slides.length;
     const position = deck.querySelector("[data-preview-position]");
     if (position) position.textContent = `Slide ${index + 1} of ${slides.length}`;
+    if (updateUrl) updatePreviewUrl(index);
   }
 
   function rememberPreviewSlide() {
@@ -107,7 +125,8 @@
 
   function restorePreviewSlide() {
     const deck = document.querySelector("[data-preview-deck]");
-    if (deck) showPreviewSlide(deck, previewSlideBeforeSwap);
+    if (!deck) return;
+    showPreviewSlide(deck, previewIndexFromUrl() ?? previewSlideBeforeSwap);
   }
 
   function blocksSlideShortcuts(target) {
@@ -240,6 +259,12 @@
   });
 
   document.addEventListener("keydown", keyboardNavigation);
+
+  window.addEventListener("hashchange", () => {
+    const deck = document.querySelector("[data-preview-deck]");
+    const index = previewIndexFromUrl();
+    if (deck && index !== null) showPreviewSlide(deck, index, false);
+  });
 
   document.addEventListener("submit", (event) => {
     const message = event.target.dataset.confirm;

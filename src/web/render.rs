@@ -20,6 +20,7 @@ pub enum LiveView {
 struct LiveData {
     selected: Vec<String>,
     counts: HashMap<String, i64>,
+    word_cloud_responses: Vec<store::WordCloudResponse>,
     ordering_values: Vec<String>,
     reactions: HashMap<String, i64>,
     answerers: i64,
@@ -96,6 +97,12 @@ pub async fn live(
         .into_iter()
         .map(|item| (item.value, item.count))
         .collect();
+    let word_cloud_responses = if matches!(&slide.interaction, Some(Interaction::WordCloud { .. }))
+    {
+        store::word_cloud_responses(pool, session.id, index).await?
+    } else {
+        Vec::new()
+    };
     let ordering_values = if matches!(&slide.interaction, Some(Interaction::Ordering { .. })) {
         store::ordering_values(pool, session.id, index).await?
     } else {
@@ -114,6 +121,7 @@ pub async fn live(
     let data = LiveData {
         selected,
         counts,
+        word_cloud_responses,
         ordering_values,
         reactions,
         answerers: store::answerer_count(pool, session.id, index).await?,
@@ -162,6 +170,7 @@ fn presenter_view(
                 &data.counts,
                 data.answerers,
                 index,
+                &data.word_cloud_responses,
                 &data.ordering_values,
             )
         })
@@ -284,6 +293,12 @@ fn audience_navigation(session: &LiveSession, index: usize, slide_count: usize) 
     )
 }
 
+fn optional_heading(question: Option<&str>) -> String {
+    question
+        .map(|question| format!("<h2>{}</h2>", encode_text(question)))
+        .unwrap_or_default()
+}
+
 fn audience_interaction(
     session: &LiveSession,
     slide_index: usize,
@@ -312,6 +327,7 @@ fn audience_interaction(
             &data.counts,
             data.answerers,
             slide_index,
+            &data.word_cloud_responses,
             &data.ordering_values,
         );
     }
@@ -333,8 +349,8 @@ fn audience_interaction(
                 &data.selected,
             );
             format!(
-                "<div class=\"interaction-body\"><h2>{}</h2><p>{}</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
-                encode_text(question),
+                "<div class=\"interaction-body\">{}<p>{}</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
+                optional_heading(question.as_deref()),
                 if *multiple {
                     "Select all that apply."
                 } else {
@@ -396,11 +412,26 @@ fn choice_buttons<'a>(
         .collect()
 }
 
+const WORD_CLOUD_COLORS: [&str; 13] = [
+    "#f5e0dc", "#f2cdcd", "#f5c2e7", "#cba6f7", "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1",
+    "#94e2d5", "#89dceb", "#74c7ec", "#89b4fa", "#b4befe",
+];
+
+fn participant_color(participant_hash: &str) -> &'static str {
+    let hash = participant_hash
+        .bytes()
+        .fold(2_166_136_261usize, |hash, byte| {
+            (hash ^ usize::from(byte)).wrapping_mul(16_777_619)
+        });
+    WORD_CLOUD_COLORS[hash % WORD_CLOUD_COLORS.len()]
+}
+
 fn interaction_results(
     spec: &Interaction,
     counts: &HashMap<String, i64>,
     answerers: i64,
     slide_index: usize,
+    word_cloud_responses: &[store::WordCloudResponse],
     ordering_values: &[String],
 ) -> String {
     match spec {
@@ -410,23 +441,31 @@ fn interaction_results(
             orientation,
             ..
         } => format!(
-            "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\"><h2>{}</h2><span>{}</span></div>{}</section>",
-            encode_text(question),
+            "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\">{}<span style=\"margin-left:auto\">{}</span></div>{}</section>",
+            optional_heading(question.as_deref()),
             answer_count_label(answerers),
             chart(options, counts, answerers, *orientation, slide_index),
         ),
         Interaction::WordCloud { prompt, .. } => {
-            let mut words: Vec<_> = counts.iter().collect();
-            words.sort_by_key(|(word, count)| (std::cmp::Reverse(**count), word.as_str()));
-            let max = words.first().map(|(_, count)| **count).unwrap_or(1).max(1);
-            let words = words
+            let max = counts.values().copied().max().unwrap_or(1).max(1);
+            let mut responses: Vec<_> = word_cloud_responses.iter().collect();
+            responses.sort_by(|left, right| {
+                let left_count = *counts.get(&left.value).unwrap_or(&1);
+                let right_count = *counts.get(&right.value).unwrap_or(&1);
+                right_count
+                    .cmp(&left_count)
+                    .then_with(|| left.value.cmp(&right.value))
+                    .then_with(|| left.participant_hash.cmp(&right.participant_hash))
+            });
+            let words = responses
                 .into_iter()
-                .map(|(word, count)| {
-                    let weight = 1 + ((*count * 5) / max);
+                .map(|response| {
+                    let count = *counts.get(&response.value).unwrap_or(&1);
+                    let weight = 1 + ((count * 5) / max);
                     format!(
-                        "<span style=\"--weight:{}\">{}</span>",
-                        weight,
-                        encode_text(word)
+                        "<span style=\"--weight:{weight};--word-color:{}\">{}</span>",
+                        participant_color(&response.participant_hash),
+                        encode_text(&response.value)
                     )
                 })
                 .collect::<String>();
@@ -709,8 +748,8 @@ fn preview_interaction(spec: &Interaction) -> String {
         Interaction::Poll {
             question, options, ..
         } => format!(
-            "<h2>{}</h2><div class=\"choices\">{}</div>",
-            encode_text(question),
+            "{}<div class=\"choices\">{}</div>",
+            optional_heading(question.as_deref()),
             options
                 .iter()
                 .map(|option| format!(
@@ -720,8 +759,11 @@ fn preview_interaction(spec: &Interaction) -> String {
                 .collect::<String>()
         ),
         Interaction::WordCloud { prompt, .. } => format!(
-            "<h2>{}</h2><div class=\"word-cloud\"><span style=\"--weight:5\">Rust</span><span style=\"--weight:3\">Fast</span><span style=\"--weight:2\">Safe</span></div>",
-            encode_text(prompt)
+            "<h2>{}</h2><div class=\"word-cloud\"><span style=\"--weight:5;--word-color:{}\">Rust</span><span style=\"--weight:3;--word-color:{}\">Fast</span><span style=\"--weight:2;--word-color:{}\">Safe</span></div>",
+            encode_text(prompt),
+            participant_color("preview-rust"),
+            participant_color("preview-fast"),
+            participant_color("preview-safe"),
         ),
         Interaction::Quiz { question, options } => format!(
             "<h2>{}</h2><div class=\"choices\">{}</div>",
@@ -759,7 +801,8 @@ mod tests {
     };
 
     use super::{
-        LiveData, audience_view, ordering_response, ordering_results, presenter_view, preview,
+        LiveData, audience_interaction, audience_view, interaction_results, ordering_response,
+        ordering_results, presenter_view, preview,
     };
 
     fn options() -> Vec<String> {
@@ -782,6 +825,73 @@ mod tests {
         assert!(html.contains("data-preview-nav=\"previous\""));
         assert!(html.contains("data-preview-nav=\"next\""));
         assert!(html.contains("Slide 1 of 2"));
+    }
+
+    #[test]
+    fn questionless_polls_omit_interaction_headings() {
+        let document = parse_deck("# Coffee or beer?\n\n:::poll\n- Coffee\n- Beer\n:::").unwrap();
+        let theme = Theme {
+            font: "system".into(),
+            background: DEFAULT_THEME_BACKGROUND.into(),
+            text: DEFAULT_THEME_TEXT.into(),
+            accent: DEFAULT_THEME_ACCENT.into(),
+        };
+        let session = LiveSession {
+            id: 1,
+            deck_version_id: 1,
+            code: "553675".into(),
+            current_slide: 0,
+            locked: true,
+            interaction_open: true,
+            results_revealed: false,
+            follow_revision: 0,
+            ended_at: None,
+        };
+        let interaction = document.slides[0].interaction.as_ref().unwrap();
+        let data = LiveData::default();
+
+        let preview = preview(&document, &theme);
+        let audience = audience_interaction(&session, 0, interaction, &data);
+        let results = interaction_results(interaction, &data.counts, 0, 0, &[], &[]);
+
+        assert!(!preview.contains("<h2>"));
+        assert!(!audience.contains("<h2>"));
+        assert!(!results.contains("<h2>"));
+        assert!(preview.contains("Coffee"));
+        assert!(audience.contains("Choose one answer."));
+        assert!(results.contains("0 answers"));
+    }
+
+    #[test]
+    fn word_cloud_uses_stable_participant_colors() {
+        let document = parse_deck(":::wordcloud prompt=\"What do you enjoy?\"\n:::").unwrap();
+        let interaction = document.slides[0].interaction.as_ref().unwrap();
+        let counts = [("Hiking".to_owned(), 2), ("Music".to_owned(), 1)]
+            .into_iter()
+            .collect();
+        let responses = vec![
+            crate::store::WordCloudResponse {
+                value: "Hiking".into(),
+                participant_hash: "participant-a".into(),
+            },
+            crate::store::WordCloudResponse {
+                value: "Hiking".into(),
+                participant_hash: "participant-b".into(),
+            },
+            crate::store::WordCloudResponse {
+                value: "Music".into(),
+                participant_hash: "participant-c".into(),
+            },
+        ];
+
+        let html = interaction_results(interaction, &counts, 3, 0, &responses, &[]);
+        let participant_color = super::participant_color("participant-a");
+
+        assert_eq!(html.matches("--word-color:").count(), 3);
+        assert!(html.contains(&format!("--word-color:{participant_color}")));
+        assert_eq!(html.matches("--weight:6").count(), 2);
+        assert_eq!(html.matches("Hiking").count(), 2);
+        assert!(html.contains("3 answers"));
     }
 
     #[test]

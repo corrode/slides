@@ -1,0 +1,2 @@
+Rust makes systems programming
+safer and more approachable.

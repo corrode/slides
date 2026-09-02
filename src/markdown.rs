@@ -22,7 +22,7 @@ pub struct Slide {
 #[derive(Debug, Clone)]
 pub enum Interaction {
     Poll {
-        question: String,
+        question: Option<String>,
         options: Vec<String>,
         multiple: bool,
         orientation: ChartOrientation,
@@ -203,8 +203,8 @@ fn parse_poll(header: &str, body: &[&str]) -> Result<Interaction> {
     let arguments = parse_arguments(header, &["question", "orientation"], &["multiple"])?;
     let question = arguments
         .attribute("question")
-        .unwrap_or("Choose an option")
-        .to_owned();
+        .filter(|question| !question.trim().is_empty())
+        .map(str::to_owned);
     let options = list_items(body);
     if options.len() < 2 {
         bail!("a poll needs at least two options");
@@ -570,6 +570,23 @@ mod tests {
     }
 
     #[test]
+    fn intro_to_rust_example_parses() {
+        let deck = parse_deck(include_str!("../examples/intro-to-rust.md")).unwrap();
+
+        assert!(!deck.slides.is_empty());
+        assert!(
+            deck.slides
+                .iter()
+                .any(|slide| matches!(slide.interaction, Some(Interaction::Poll { .. })))
+        );
+        assert!(
+            deck.slides
+                .iter()
+                .any(|slide| matches!(slide.interaction, Some(Interaction::WordCloud { .. })))
+        );
+    }
+
+    #[test]
     fn parses_ordering_cards() {
         let deck = parse_deck(
             ":::ordering prompt=\"Put the release steps in order\"\n- Build\n- Test\n- Deploy\n:::",
@@ -616,6 +633,24 @@ mod tests {
     fn rejects_word_cloud_body_content() {
         let error = parse_deck(":::wordcloud\nunexpected\n:::").unwrap_err();
         assert!(error.to_string().contains("slide 1"));
+    }
+
+    #[test]
+    fn poll_questions_are_optional_and_horizontal_by_default() {
+        for source in [
+            ":::poll\n- Coffee\n- Beer\n:::",
+            ":::poll question=\"\"\n- Coffee\n- Beer\n:::",
+        ] {
+            let deck = parse_deck(source).unwrap();
+            assert!(matches!(
+                &deck.slides[0].interaction,
+                Some(Interaction::Poll {
+                    question: None,
+                    orientation: ChartOrientation::Horizontal,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
