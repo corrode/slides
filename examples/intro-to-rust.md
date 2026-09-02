@@ -375,13 +375,15 @@ This is why Rust is so powerful.
 
 # Rust didn't remove the complexity
 
-It just made each problem visible:
+---
+
+# It just made each problem visible
 
 - Failure → `Result`
 - Early return → `?`
 - Cleanup → ownership and `Drop`
 - Text decoding → an explicit error
-- “Word” → still our policy decision
+- “Word” → still our decision
 
 ---
 
@@ -389,7 +391,7 @@ It just made each problem visible:
 
 Systems are complex.
 
-Related concepts have subtle differences. A path is not a string, for example.
+Related concepts have subtle differences. (A path is not a string, for example.)
 
 In the face of ambiguity, the compiler asks for specificity.
 
@@ -404,15 +406,9 @@ If you like:
 - Regular sessions around your current challenges
 - Questions collected ahead of time
 - Examples prepared for each session
-- Active participation from the team
+- Active participation from the team expected
 
 **I'm not a magician,** but I can help you understand Rust and apply it with confidence. 🧙‍♂️🪄
-
----
-
-# Questions?
-
-What felt useful, surprising, unclear?
 
 ---
 
@@ -430,4 +426,10 @@ What felt useful, surprising, unclear?
 7. Print the filename with the most characters.
 8. Create a `FileStats` struct containing words, lines, and characters.
 
-[Open the self-directed exercise in the Rust Playground](https://play.rust-lang.org/?version=stable&mode=debug&edition=2024&gist=afa67b8068a6efcaa587734ad83aedfe)
+→ [**Rust Playground**](https://play.rust-lang.org/?version=stable&mode=debug&edition=2024&gist=afa67b8068a6efcaa587734ad83aedfe)
+
+---
+
+# Questions?
+
+What felt useful, surprising, unclear?
