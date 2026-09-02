@@ -92,6 +92,7 @@ jobs:
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
+          COOLIFY_RECREATE_RESOURCE: ${{ vars.COOLIFY_RECREATE_RESOURCE }}
           COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         shell: bash
@@ -131,6 +132,18 @@ jobs:
             app_uuid="$(jq --raw-output \
               '[.[] | select((.domains // .fqdn // "") | contains("slides.corrode.dev"))] | if length == 1 then .[0].uuid else empty end' \
               <<<"${applications}")"
+          fi
+
+          if [ -n "${app_uuid}" ] && [ "${COOLIFY_RECREATE_RESOURCE}" = "true" ]; then
+            curl --request DELETE \
+              "${COOLIFY_BASE_URL}/api/v1/applications/${app_uuid}" \
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
+              --header "Accept: application/json" \
+              --fail-with-body \
+              --show-error \
+              --silent >/dev/null
+            echo "Removed the incomplete Coolify application ${app_uuid}."
+            app_uuid=""
           fi
 
           if [ -z "${app_uuid}" ]; then
@@ -199,6 +212,7 @@ jobs:
                 build_pack: "dockerfile",
                 dockerfile_location: "/Dockerfile",
                 ports_exposes: "3000",
+                custom_docker_run_options: "--mount type=volume,source=slides-data,target=/app/data",
                 name: "slides",
                 description: "Interactive presentation server",
                 domains: "https://slides.corrode.dev",
@@ -215,24 +229,6 @@ jobs:
             app_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${application}")"
             echo "Created Coolify application ${app_uuid}."
           fi
-
-          update_payload="$(jq --null-input '{
-            name: "slides",
-            domains: "https://slides.corrode.dev",
-            git_branch: "main",
-            build_pack: "dockerfile",
-            dockerfile_location: "/Dockerfile",
-            ports_exposes: "3000",
-            custom_docker_run_options: "--mount type=volume,source=slides-data,target=/app/data",
-            health_check_enabled: true,
-            health_check_path: "/healthz",
-            health_check_port: "3000",
-            health_check_method: "GET",
-            health_check_return_code: 200,
-            health_check_scheme: "http",
-            is_auto_deploy_enabled: false
-          }')"
-          api_send PATCH "/applications/${app_uuid}" "${update_payload}" >/dev/null
 
           admin_env="$(jq --null-input --arg value "${ADMIN_TOKEN}" \
             '{key: "SLIDES_ADMIN_PASSWORD", value: $value, is_preview: false, is_literal: true}')"
