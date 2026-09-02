@@ -221,7 +221,8 @@ pub async fn events(
         LiveView::Audience
     };
     let participant = participant_hash(&jar);
-    let mut updates = state.hub.subscribe(session.id).await;
+    let runtime = state.hub.runtime(session.id).await;
+    let mut updates = runtime.subscribe();
     let session = store::get_session(&state.pool, session.id).await?;
     let mut requested_slide = historical_slide(
         query.slide,
@@ -240,7 +241,8 @@ pub async fn events(
         reconcile.tick().await;
 
         'updates: loop {
-            let fragment = match snapshot(
+            let rendered_revision = runtime.revision();
+            let (fragment, render_failed) = match snapshot(
                 &stream_state,
                 &stream_code,
                 view,
@@ -251,11 +253,11 @@ pub async fn events(
                 Ok((fragment, marker, reconciled_slide)) => {
                     last_marker = marker;
                     requested_slide = reconciled_slide;
-                    fragment
+                    (fragment, false)
                 }
                 Err(error) => {
                     tracing::warn!(error = ?error, code = %stream_code, "could not render live update");
-                    "<div id=\"live-error\" class=\"notice error\" hx-swap-oob=\"outerHTML\">Could not apply the latest live update. The next update will retry automatically.</div>".into()
+                    ("<div id=\"live-error\" class=\"notice error\" hx-swap-oob=\"outerHTML\">Could not apply the latest live update. The next update will retry automatically.</div>".into(), true)
                 }
             };
             yield Ok::<Event, Infallible>(Event::default().data(fragment));
@@ -271,21 +273,26 @@ pub async fn events(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break 'updates,
                     },
-                    _ = reconcile.tick() => match required_session(&stream_state, &stream_code).await {
-                        Ok(fresh) => {
-                            let marker = SessionMarker::from(&fresh);
-                            if marker != last_marker {
-                                if marker.slide != last_marker.slide
-                                    || marker.follow_revision != last_marker.follow_revision
-                                {
-                                    requested_slide = None;
+                    _ = reconcile.tick() => {
+                        if render_failed || runtime.revision() != rendered_revision {
+                            break;
+                        }
+                        match required_session(&stream_state, &stream_code).await {
+                            Ok(fresh) => {
+                                let marker = SessionMarker::from(&fresh);
+                                if marker != last_marker {
+                                    if marker.slide != last_marker.slide
+                                        || marker.follow_revision != last_marker.follow_revision
+                                    {
+                                        requested_slide = None;
+                                    }
+                                    break;
                                 }
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = ?error, code = %stream_code, "could not reconcile live session");
                                 break;
                             }
-                        }
-                        Err(error) => {
-                            tracing::warn!(error = ?error, code = %stream_code, "could not reconcile live session");
-                            break;
                         }
                     },
                 }

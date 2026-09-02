@@ -533,16 +533,33 @@ fn render_markdown(source: &str) -> String {
                 rendered_events.push(Event::Text(raw));
             }
             Event::Start(Tag::Link {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => rendered_events.push(Event::Start(Tag::Link {
-                link_type,
-                dest_url: safe_destination(dest_url),
-                title,
-                id,
-            })),
+                dest_url, title, ..
+            }) => {
+                let destination = safe_destination(dest_url);
+                let title = if title.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " title=\"{}\"",
+                        html_escape::encode_double_quoted_attribute(&title)
+                    )
+                };
+                let external = if is_external_destination(&destination) {
+                    " target=\"_blank\" rel=\"noopener noreferrer\""
+                } else {
+                    ""
+                };
+                rendered_events.push(Event::Html(CowStr::Boxed(
+                    format!(
+                        "<a href=\"{}\"{title}{external}>",
+                        html_escape::encode_double_quoted_attribute(&destination)
+                    )
+                    .into_boxed_str(),
+                )));
+            }
+            Event::End(TagEnd::Link) => {
+                rendered_events.push(Event::Html(CowStr::Borrowed("</a>")));
+            }
             Event::Start(Tag::Image {
                 link_type,
                 dest_url,
@@ -562,6 +579,11 @@ fn render_markdown(source: &str) -> String {
     let mut output = String::new();
     html::push_html(&mut output, rendered_events.into_iter());
     output
+}
+
+fn is_external_destination(destination: &str) -> bool {
+    let destination = destination.trim().to_ascii_lowercase();
+    destination.starts_with("http://") || destination.starts_with("https://")
 }
 
 fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
@@ -766,10 +788,18 @@ mod tests {
     }
 
     #[test]
-    fn blocks_unsafe_link_schemes() {
-        let deck = parse_deck("[unsafe](javascript:alert(1)) [safe](https://example.com)").unwrap();
-        assert!(!deck.slides[0].html.contains("javascript:"));
-        assert!(deck.slides[0].html.contains("https://example.com"));
+    fn secures_links_and_opens_external_destinations_in_a_new_tab() {
+        let deck = parse_deck(
+            "[unsafe](javascript:alert(1)) [external](https://example.com) [local](/join)",
+        )
+        .unwrap();
+        let html = &deck.slides[0].html;
+
+        assert!(!html.contains("javascript:"));
+        assert!(html.contains(
+            "href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\""
+        ));
+        assert!(html.contains("href=\"/join\">local</a>"));
     }
 
     #[test]

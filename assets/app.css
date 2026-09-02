@@ -813,6 +813,25 @@ button.small {
   margin-bottom: 0;
 }
 
+.slide-content > p:has(> img:only-child),
+.slide-content > p:has(> a:only-child > img:only-child) {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.slide-content > p:has(> img:only-child) img,
+.slide-content > p:has(> a:only-child > img:only-child) img {
+  width: auto;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .slide-content:has(> p:first-child > img:only-child) {
   position: relative;
   justify-content: flex-end;
@@ -838,7 +857,7 @@ button.small {
 .slide-content:has(> p:first-child > img:only-child) > p:first-child img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .slide-content:has(> p:first-child > img:only-child) > :not(p:first-child) {

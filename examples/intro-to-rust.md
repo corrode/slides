@@ -90,7 +90,7 @@ Ask questions and use the reactions whenever something is:
 
 ---
 
-![My cat Oskar](/assets/oskar.jpg)
+![My cat Oskar](/assets/oskar.webp)
 
 ---
 
