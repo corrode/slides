@@ -28,13 +28,13 @@ RUN apt-get update \
     && groupadd --system --gid 10001 slides \
     && useradd --system --uid 10001 --gid slides --home-dir /app --shell /usr/sbin/nologin slides \
     && mkdir -p /app/data \
-    && chown -R slides:slides /app
+    && chown slides:slides /app/data
 
 WORKDIR /app
 
-COPY --link --from=builder --chown=10001:10001 /build/target/release/slides /usr/local/bin/slides
-COPY --link --chown=10001:10001 assets ./assets
-COPY --link --chown=10001:10001 examples ./examples
+COPY --link --from=builder /build/target/release/slides /usr/local/bin/slides
+COPY --link assets ./assets
+COPY --link examples ./examples
 
 ENV SLIDES_BIND=0.0.0.0:3000 \
     SLIDES_DATABASE_URL=sqlite://data/slides.db \

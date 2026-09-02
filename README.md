@@ -59,15 +59,15 @@ The current live-update hub is process-local. Run exactly one application replic
 
 `.github/workflows/ci.yml` formats, lints, and tests Rust; builds the Docker image for pull requests; and publishes `latest` plus commit-SHA tags to GHCR from `main`.
 
-A push to `main` also provisions and deploys the application through Coolify. The first deployment finds `corrode1`, creates a Slides project and persistent `/app/data` volume when needed, and uses a Coolify GitHub App with access to the private `corrode/slides` repository. Later deployments reuse the application. The workflow requires:
+A push to `main` deploys the published `ghcr.io/corrode/slides:latest` image to an existing Coolify Docker-image application. The application exposes port `3000`, mounts the `slides-data` volume at `/app/data`, uses `/healthz` for health checks, and runs one replica. The workflow requires:
 
-- secret `COOLIFY_TOKEN`: a Coolify API token with read, write, and deploy access;
+- secret `COOLIFY_TOKEN`: a Coolify API token with write and deploy access;
 - secret `ADMIN_TOKEN`: the production presenter password;
-- optional variable `COOLIFY_RESOURCE_UUID`: skips resource discovery after the first deployment;
+- variable `COOLIFY_RESOURCE_UUID`: the Docker-image application's UUID;
 - optional variable `COOLIFY_BASE_URL`: defaults to `https://admin.corrode.dev`;
 - optional variable `DEPLOY_HEALTHCHECK_URL`: defaults to `https://slides.corrode.dev/healthz`.
 
-When the production database is empty, the workflow also creates and publishes `examples/intro-to-rust.md`. Existing decks are left unchanged.
+Every deployment creates the Intro to Rust deck when needed and republishes it from `examples/intro-to-rust.md`.
 
 ## Database migrations
 

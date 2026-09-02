@@ -87,12 +87,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Find or provision Coolify application
-        id: coolify
+      - name: Configure Coolify application
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
-          COOLIFY_RECREATE_RESOURCE: ${{ vars.COOLIFY_RECREATE_RESOURCE }}
           COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         shell: bash
@@ -101,8 +99,8 @@ jobs:
 
           COOLIFY_TOKEN="${COOLIFY_TOKEN//[[:space:]]/}"
           COOLIFY_TOKEN="${COOLIFY_TOKEN#Bearer}"
-          if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${ADMIN_TOKEN}" ]; then
-            echo "The COOLIFY_TOKEN and ADMIN_TOKEN repository secrets are required." >&2
+          if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${ADMIN_TOKEN}" ] || [ -z "${COOLIFY_RESOURCE_UUID}" ]; then
+            echo "The COOLIFY_TOKEN and ADMIN_TOKEN secrets and COOLIFY_RESOURCE_UUID variable are required." >&2
             exit 1
           fi
 
@@ -126,104 +124,7 @@ jobs:
               --silent
           }
 
-          app_uuid="${COOLIFY_RESOURCE_UUID}"
-          if [ -z "${app_uuid}" ]; then
-            applications="$(api_get /applications)"
-            app_uuid="$(jq --raw-output \
-              '[.[] | select((.domains // .fqdn // "") | contains("slides.corrode.dev"))] | if length == 1 then .[0].uuid else empty end' \
-              <<<"${applications}")"
-          fi
-
-          if [ -n "${app_uuid}" ] && [ "${COOLIFY_RECREATE_RESOURCE}" = "true" ]; then
-            image_path="${IMAGE_NAME#ghcr.io/}"
-            registry_token="$(curl \
-              "https://ghcr.io/token?service=ghcr.io&scope=repository:${image_path}:pull" \
-              --fail-with-body \
-              --show-error \
-              --silent | jq --exit-status --raw-output '.token')"
-            if ! curl "https://ghcr.io/v2/${image_path}/manifests/latest" \
-              --header "Authorization: Bearer ${registry_token}" \
-              --header "Accept: application/vnd.oci.image.index.v1+json" \
-              --fail-with-body \
-              --max-time 60 \
-              --show-error \
-              --silent \
-              --output /dev/null; then
-              echo "${IMAGE_NAME}:latest is not anonymously pullable; refusing to replace the live application." >&2
-              exit 1
-            fi
-
-            curl --request DELETE \
-              "${COOLIFY_BASE_URL}/api/v1/applications/${app_uuid}" \
-              --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
-              --header "Accept: application/json" \
-              --fail-with-body \
-              --show-error \
-              --silent >/dev/null
-            echo "Removed the incomplete Coolify application ${app_uuid}."
-            app_uuid=""
-          fi
-
-          if [ -z "${app_uuid}" ]; then
-            servers="$(api_get /servers)"
-            server_uuid="$(jq --raw-output \
-              '[.[] | select(.name == "corrode1" or .ip == "46.225.7.147")] | if length == 1 then .[0].uuid elif length == 0 and ($servers | length) == 1 then $servers[0].uuid else empty end' \
-              --argjson servers "${servers}" <<<"${servers}")"
-            if [ -z "${server_uuid}" ]; then
-              echo "Could not identify corrode1 uniquely in the Coolify server list." >&2
-              jq '[.[] | {name, ip, uuid}]' <<<"${servers}"
-              exit 1
-            fi
-
-            projects="$(api_get /projects)"
-            project_uuid="$(jq --raw-output \
-              '[.[] | select((.name | ascii_downcase) == "slides")] | if length == 1 then .[0].uuid else empty end' \
-              <<<"${projects}")"
-            if [ -z "${project_uuid}" ]; then
-              project="$(api_send POST /projects '{"name":"Slides","description":"Interactive presentation server"}')"
-              project_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${project}")"
-              echo "Created Coolify project ${project_uuid}."
-            fi
-
-            environments="$(api_get "/projects/${project_uuid}/environments")"
-            environment_uuid="$(jq --raw-output \
-              '[.[] | select(.name == "production")] | if length == 1 then .[0].uuid else empty end' \
-              <<<"${environments}")"
-            if [ -z "${environment_uuid}" ]; then
-              environment="$(api_send POST "/projects/${project_uuid}/environments" '{"name":"production"}')"
-              environment_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${environment}")"
-            fi
-
-            create_payload="$(jq --null-input \
-              --arg project "${project_uuid}" \
-              --arg environment "${environment_uuid}" \
-              --arg server "${server_uuid}" \
-              '{
-                project_uuid: $project,
-                environment_name: "production",
-                environment_uuid: $environment,
-                server_uuid: $server,
-                docker_registry_image_name: "ghcr.io/corrode/slides",
-                docker_registry_image_tag: "latest",
-                ports_exposes: "3000",
-                custom_docker_run_options: "--mount type=volume,source=slides-data,target=/app/data",
-                name: "slides",
-                description: "Interactive presentation server",
-                domains: "https://slides.corrode.dev",
-                health_check_enabled: true,
-                health_check_path: "/healthz",
-                health_check_port: "3000",
-                health_check_method: "GET",
-                health_check_return_code: 200,
-                health_check_scheme: "http",
-                instant_deploy: false
-              }')"
-            application="$(api_send POST /applications/dockerimage "${create_payload}")"
-            app_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${application}")"
-            echo "Created Coolify application ${app_uuid}."
-          fi
-
-          environment_variables="$(api_get "/applications/${app_uuid}/envs")"
+          environment_variables="$(api_get "/applications/${COOLIFY_RESOURCE_UUID}/envs")"
           upsert_env() {
             local key="${1}"
             local payload="${2}"
@@ -233,7 +134,7 @@ jobs:
               <<<"${environment_variables}" >/dev/null; then
               method="PATCH"
             fi
-            api_send "${method}" "/applications/${app_uuid}/envs" "${payload}" >/dev/null
+            api_send "${method}" "/applications/${COOLIFY_RESOURCE_UUID}/envs" "${payload}" >/dev/null
             echo "Configured ${key}."
           }
 
@@ -243,13 +144,10 @@ jobs:
           upsert_env SLIDES_SECURE_COOKIES \
             '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}'
 
-          echo "resource_uuid=${app_uuid}" >>"${GITHUB_OUTPUT}"
-          echo "Coolify application UUID: ${app_uuid}"
-
       - name: Deploy and wait for Coolify
         env:
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
-          COOLIFY_RESOURCE_UUID: ${{ steps.coolify.outputs.resource_uuid }}
+          COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         shell: bash
         run: |
@@ -308,7 +206,7 @@ jobs:
           --max-time 10
           "${DEPLOY_HEALTHCHECK_URL}"
 
-      - name: Seed the Intro to Rust deck
+      - name: Publish the Intro to Rust deck
         env:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           SLIDES_BASE_URL: https://slides.corrode.dev
