@@ -135,7 +135,20 @@ jobs:
           fi
 
           if [ -n "${app_uuid}" ] && [ "${COOLIFY_RECREATE_RESOURCE}" = "true" ]; then
-            if ! timeout 60 docker manifest inspect "${IMAGE_NAME}:latest" >/dev/null; then
+            image_path="${IMAGE_NAME#ghcr.io/}"
+            registry_token="$(curl \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:${image_path}:pull" \
+              --fail-with-body \
+              --show-error \
+              --silent | jq --exit-status --raw-output '.token')"
+            if ! curl "https://ghcr.io/v2/${image_path}/manifests/latest" \
+              --header "Authorization: Bearer ${registry_token}" \
+              --header "Accept: application/vnd.oci.image.index.v1+json" \
+              --fail-with-body \
+              --max-time 60 \
+              --show-error \
+              --silent \
+              --output /dev/null; then
               echo "${IMAGE_NAME}:latest is not anonymously pullable; refusing to replace the live application." >&2
               exit 1
             fi
