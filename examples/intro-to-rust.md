@@ -87,6 +87,10 @@ Use the reaction bar whenever something is:
 
 ---
 
+![My cat Oskar](/assets/oskar.jpg)
+
+---
+
 # Outside of programming…
 
 :::wordcloud prompt="Name one thing you enjoy besides programming" max="32"
@@ -173,20 +177,14 @@ safer and more approachable.
 
 # Python: start here
 
-```python
-def count_words(filename):
-    pass
+```python code/word-count/python/step_01.py
 ```
 
 ---
 
 # Read, split, count
 
-```python
-def count_words(filename):
-    file = open(filename)
-    text = file.read()
-    return len(text.split())
+```python code/word-count/python/step_02.py
 ```
 
 Simple and correct (for the happy path).  
@@ -196,12 +194,7 @@ Simple and correct (for the happy path).
 
 # We should close the file
 
-```python
-def count_words(filename):
-    file = open(filename)
-    text = file.read()
-    file.close()
-    return len(text.split())
+```python code/word-count/python/step_03.py
 ```
 
 But what if `read()` raises an exception?
@@ -210,11 +203,7 @@ But what if `read()` raises an exception?
 
 # Let the context manager handle it
 
-```python
-def count_words(filename):
-    with open(filename) as file:
-        text = file.read()
-    return len(text.split())
+```python code/word-count/python/step_04.py
 ```
 
 Now the file closes when the block ends; even on failure.
@@ -231,15 +220,7 @@ Now the file closes when the block ends; even on failure.
 
 # Handle missing files
 
-```python
-def count_words(filename):
-    try:
-        with open(filename) as file:
-            text = file.read()
-        return len(text.split())
-    except FileNotFoundError:
-        print(f"File not found: {filename}")
-        return 0
+```python code/word-count/python/step_05.py
 ```
 
 ---
@@ -259,20 +240,7 @@ What if the path is…
 
 # Make the assumptions explicit
 
-```python
-def count_words(filename):
-    try:
-        with open(filename, encoding="utf-8") as file:
-            text = file.read()
-        return len(text.split())
-    except (
-        FileNotFoundError,
-        IsADirectoryError,
-        PermissionError,
-        UnicodeDecodeError,
-    ) as error:
-        print(f"Could not read {filename}: {error}")
-        return 0
+```python code/word-count/python/step_06.py
 ```
 
 ---
@@ -302,19 +270,7 @@ text = file.read()
 
 # Don't load the entire file
 
-```python
-def count_words(filename):
-    try:
-        with open(filename, encoding="utf-8") as file:
-            return sum(len(line.split()) for line in file)
-    except (
-        FileNotFoundError,
-        IsADirectoryError,
-        PermissionError,
-        UnicodeDecodeError,
-    ) as error:
-        print(f"Could not read {filename}: {error}")
-        return 0
+```python code/word-count/python/step_07.py
 ```
 
 ---
@@ -335,10 +291,7 @@ How does `split()` handle these?
 
 # Now let's try Rust
 
-```rust
-fn count_words(_filename: &str) -> usize {
-    todo!()
-}
+```rust code/word-count/rust/step_01.rs
 ```
 
 ```text
@@ -351,13 +304,7 @@ thread 'main' panicked at 'not yet implemented'
 
 # Read, split, count?
 
-```rust
-use std::fs;
-
-fn count_words(filename: &str) -> usize {
-    let text = fs::read_to_string(filename);
-    text.split_whitespace().count()
-}
+```rust code/word-count/rust/step_02.rs
 ```
 
 ---
@@ -377,13 +324,7 @@ It returned either text **or an I/O error**.
 
 # We can force the happy path
 
-```rust
-use std::fs;
-
-fn count_words(filename: &str) -> usize {
-    let text = fs::read_to_string(filename).unwrap(); // 🔥
-    text.split_whitespace().count()
-}
+```rust code/word-count/rust/step_03.rs
 ```
 
 This works, but a missing or invalid file now panics (i.e., halt and catch fire).
@@ -392,13 +333,7 @@ This works, but a missing or invalid file now panics (i.e., halt and catch fire)
 
 # Handle errors or return them
 
-```rust
-use std::{fs, io};
-
-fn count_words(filename: &str) -> io::Result<usize> {
-    let text = fs::read_to_string(filename)?;
-    Ok(text.split_whitespace().count())
-}
+```rust code/word-count/rust/step_04.rs
 ```
 
 `?` means: return the error to the caller if reading failed.
@@ -431,35 +366,13 @@ This is why Rust is so powerful.
 
 ---
 
-# Stream the file
-
-```rust
-use std::{
-    fs::File,
-    io::{self, BufRead, BufReader},
-};
-
-fn count_words(filename: &str) -> io::Result<usize> {
-    let file = File::open(filename)?;
-    let reader = BufReader::new(file);
-
-    reader.lines().try_fold(
-        0,
-        |count, line| Ok(count + line?.split_whitespace().count()),
-    )
-}
-```
-
----
-
 # Rust didn't remove the complexity
 
-It gave each concern a visible home:
+It just made each problem visible:
 
 - Failure → `Result`
 - Early return → `?`
 - Cleanup → ownership and `Drop`
-- Streaming → `BufReader`
 - Text decoding → an explicit error
 - “Word” → still our policy decision
 
@@ -469,25 +382,27 @@ It gave each concern a visible home:
 
 Systems are complex.
 
-Related concepts have subtle differences.
+Related concepts have subtle differences. A path is not a string, for example.
 
 In the face of ambiguity, the compiler asks for specificity.
 
-> The compiler is your friend.
+**But the compiler is your friend. Read the error messages. 🤗**
 
 ---
 
 # Where we go from here
 
+If you like:
+
 - Regular sessions around your current challenges
 - Questions collected ahead of time
-- Focused examples prepared for each session
+- Examples prepared for each session
 - Active participation from the team
 
-I'm not a magician—but I can help you understand Rust and apply it with confidence.
+**I'm not a magician,** but I can help you understand Rust and apply it with confidence. 🧙‍♂️🪄
 
 ---
 
 # Questions?
 
-What felt useful, surprising, or unclear?
+What felt useful, surprising, unclear?

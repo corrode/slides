@@ -15,10 +15,11 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parent
+EXAMPLES_DIR = ROOT.parent.parent
 PYTHON_DIR = ROOT / "python"
 RUST_DIR = ROOT / "rust"
 FIXTURES = ROOT / "fixtures"
-DECK = ROOT.parent.parent / "examples" / "intro-to-rust.md"
+DECK = EXAMPLES_DIR / "intro-to-rust.md"
 
 PYTHON_STEPS = [PYTHON_DIR / f"step_{number:02}.py" for number in range(1, 8)]
 RUST_STEPS = [RUST_DIR / f"step_{number:02}.rs" for number in range(1, 6)]
@@ -145,18 +146,18 @@ def verify_rust():
     print("Rust steps: verified (including expected failures)")
 
 
-def fenced_blocks(language, source):
-    pattern = rf"```{language}\n(.*?)\n```"
-    return re.findall(pattern, source, flags=re.DOTALL)
+def referenced_files(language, source):
+    pattern = rf"```{language} (code/[^\s]+)\n\s*```"
+    return re.findall(pattern, source)
 
 
 def verify_deck_snippets():
     source = DECK.read_text()
-    expected_python = [path.read_text().strip() for path in PYTHON_STEPS]
-    expected_rust = [path.read_text().strip() for path in RUST_STEPS]
-    assert fenced_blocks("python", source) == expected_python
-    assert fenced_blocks("rust", source) == expected_rust
-    print("Slide snippets: synchronized with source files")
+    expected_python = [path.relative_to(EXAMPLES_DIR).as_posix() for path in PYTHON_STEPS]
+    expected_rust = [path.relative_to(EXAMPLES_DIR).as_posix() for path in RUST_STEPS[:4]]
+    assert referenced_files("python", source) == expected_python
+    assert referenced_files("rust", source) == expected_rust
+    print("Slide code references: synchronized with source files")
 
 
 def main():

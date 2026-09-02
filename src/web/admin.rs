@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     error::{AppError, AppResult},
-    markdown::{DeckDocument, parse_deck},
+    markdown::{DeckDocument, parse_deck, resolve_code_references},
     models::{Deck, DeckSummary, Theme},
     store,
     web::{AppState, is_admin, require_admin, template},
@@ -200,12 +200,15 @@ pub async fn publish(
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     validate_deck_form(&form)?;
-    parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let published_source = resolve_code_references(&form.source)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
     store::save_and_publish_deck(
         &state.pool,
         deck.id,
         form.title.trim(),
         &form.source,
+        &published_source,
         &form.font,
         &form.background,
         &form.text,

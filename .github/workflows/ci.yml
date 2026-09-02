@@ -82,26 +82,180 @@ jobs:
     name: Deploy to Coolify
     runs-on: ubuntu-latest
     needs: image
-    if: >-
-      github.event_name != 'pull_request' &&
-      github.ref == 'refs/heads/main' &&
-      vars.COOLIFY_RESOURCE_UUID != ''
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
-      - name: Deploy and wait for Coolify
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Find or provision Coolify application
+        id: coolify
         env:
-          COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
           COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${COOLIFY_TOKEN}" ]; then
-            echo "The COOLIFY_TOKEN repository secret is not configured." >&2
+          if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${ADMIN_TOKEN}" ]; then
+            echo "The COOLIFY_TOKEN and ADMIN_TOKEN repository secrets are required." >&2
             exit 1
           fi
 
-          COOLIFY_BASE_URL="${COOLIFY_BASE_URL:-https://admin.corrode.dev}"
+          api_get() {
+            curl "${COOLIFY_BASE_URL}/api/v1${1}" \
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
+              --header "Accept: application/json" \
+              --fail-with-body \
+              --show-error \
+              --silent
+          }
+
+          api_send() {
+            curl --request "${1}" "${COOLIFY_BASE_URL}/api/v1${2}" \
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
+              --header "Accept: application/json" \
+              --header "Content-Type: application/json" \
+              --data "${3}" \
+              --fail-with-body \
+              --show-error \
+              --silent
+          }
+
+          app_uuid="${COOLIFY_RESOURCE_UUID}"
+          if [ -z "${app_uuid}" ]; then
+            applications="$(api_get /applications)"
+            app_uuid="$(jq --raw-output \
+              '[.[] | select((.domains // .fqdn // "") | contains("slides.corrode.dev"))] | if length == 1 then .[0].uuid else empty end' \
+              <<<"${applications}")"
+          fi
+
+          if [ -z "${app_uuid}" ]; then
+            servers="$(api_get /servers)"
+            server_uuid="$(jq --raw-output \
+              '[.[] | select(.name == "corrode1" or .ip == "46.225.7.147")] | if length == 1 then .[0].uuid elif length == 0 and ($servers | length) == 1 then $servers[0].uuid else empty end' \
+              --argjson servers "${servers}" <<<"${servers}")"
+            if [ -z "${server_uuid}" ]; then
+              echo "Could not identify corrode1 uniquely in the Coolify server list." >&2
+              jq '[.[] | {name, ip, uuid}]' <<<"${servers}"
+              exit 1
+            fi
+
+            projects="$(api_get /projects)"
+            project_uuid="$(jq --raw-output \
+              '[.[] | select((.name | ascii_downcase) == "slides")] | if length == 1 then .[0].uuid else empty end' \
+              <<<"${projects}")"
+            if [ -z "${project_uuid}" ]; then
+              project="$(api_send POST /projects '{"name":"Slides","description":"Interactive presentation server"}')"
+              project_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${project}")"
+              echo "Created Coolify project ${project_uuid}."
+            fi
+
+            environments="$(api_get "/projects/${project_uuid}/environments")"
+            environment_uuid="$(jq --raw-output \
+              '[.[] | select(.name == "production")] | if length == 1 then .[0].uuid else empty end' \
+              <<<"${environments}")"
+            if [ -z "${environment_uuid}" ]; then
+              environment="$(api_send POST "/projects/${project_uuid}/environments" '{"name":"production"}')"
+              environment_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${environment}")"
+            fi
+
+            github_apps="$(api_get /github-apps)"
+            github_app_uuid=""
+            while IFS= read -r github_app; do
+              github_app_id="$(jq --raw-output '.id' <<<"${github_app}")"
+              if repositories="$(api_get "/github-apps/${github_app_id}/repositories")"; then
+                if jq --exit-status \
+                  '.repositories | any((.full_name // .name_with_owner // "") == "corrode/slides")' \
+                  <<<"${repositories}" >/dev/null; then
+                  github_app_uuid="$(jq --raw-output '.uuid' <<<"${github_app}")"
+                  break
+                fi
+              fi
+            done < <(jq --compact-output '.[]' <<<"${github_apps}")
+
+            if [ -z "${github_app_uuid}" ]; then
+              echo "No Coolify GitHub App with access to corrode/slides was found." >&2
+              jq '[.[] | {name, organization, uuid}]' <<<"${github_apps}"
+              exit 1
+            fi
+
+            create_payload="$(jq --null-input \
+              --arg project "${project_uuid}" \
+              --arg environment "${environment_uuid}" \
+              --arg server "${server_uuid}" \
+              --arg github_app "${github_app_uuid}" \
+              '{
+                project_uuid: $project,
+                environment_name: "production",
+                environment_uuid: $environment,
+                server_uuid: $server,
+                github_app_uuid: $github_app,
+                git_repository: "corrode/slides",
+                git_branch: "main",
+                build_pack: "dockerfile",
+                dockerfile_location: "/Dockerfile",
+                ports_exposes: "3000",
+                name: "slides",
+                description: "Interactive presentation server",
+                domains: "https://slides.corrode.dev",
+                health_check_enabled: true,
+                health_check_path: "/healthz",
+                health_check_port: "3000",
+                health_check_method: "GET",
+                health_check_return_code: 200,
+                health_check_scheme: "http",
+                is_auto_deploy_enabled: false,
+                instant_deploy: false
+              }')"
+            application="$(api_send POST /applications/private-github-app "${create_payload}")"
+            app_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${application}")"
+            echo "Created Coolify application ${app_uuid}."
+          fi
+
+          update_payload="$(jq --null-input '{
+            name: "slides",
+            domains: "https://slides.corrode.dev",
+            git_branch: "main",
+            build_pack: "dockerfile",
+            dockerfile_location: "/Dockerfile",
+            ports_exposes: "3000",
+            health_check_enabled: true,
+            health_check_path: "/healthz",
+            health_check_port: "3000",
+            health_check_method: "GET",
+            health_check_return_code: 200,
+            health_check_scheme: "http",
+            is_auto_deploy_enabled: false
+          }')"
+          api_send PATCH "/applications/${app_uuid}" "${update_payload}" >/dev/null
+
+          admin_env="$(jq --null-input --arg value "${ADMIN_TOKEN}" \
+            '{key: "SLIDES_ADMIN_PASSWORD", value: $value, is_preview: false, is_literal: true}')"
+          api_send PATCH "/applications/${app_uuid}/envs" "${admin_env}" >/dev/null
+          api_send PATCH "/applications/${app_uuid}/envs" \
+            '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}' >/dev/null
+
+          storages="$(api_get "/applications/${app_uuid}/storages")"
+          if ! jq --exit-status \
+            '(.storages // .) | any(.mount_path == "/app/data")' <<<"${storages}" >/dev/null; then
+            api_send POST "/applications/${app_uuid}/storages" \
+              '{"type":"persistent","name":"slides-data","mount_path":"/app/data"}' >/dev/null
+          fi
+
+          echo "resource_uuid=${app_uuid}" >>"${GITHUB_OUTPUT}"
+          echo "Coolify application UUID: ${app_uuid}"
+
+      - name: Deploy and wait for Coolify
+        env:
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
+          COOLIFY_RESOURCE_UUID: ${{ steps.coolify.outputs.resource_uuid }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
           response="$(curl --request POST \
             "${COOLIFY_BASE_URL}/api/v1/deploy?uuid=${COOLIFY_RESOURCE_UUID}&force=false" \
             --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
@@ -111,7 +265,7 @@ jobs:
             --silent)"
           deployment_uuid="$(jq --exit-status --raw-output '.deployments[0].deployment_uuid' <<<"${response}")"
 
-          for _ in {1..60}; do
+          for _ in {1..120}; do
             deployment="$(curl \
               "${COOLIFY_BASE_URL}/api/v1/deployments/${deployment_uuid}" \
               --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
@@ -138,9 +292,8 @@ jobs:
           exit 1
 
       - name: Verify production health
-        if: vars.DEPLOY_HEALTHCHECK_URL != ''
         env:
-          DEPLOY_HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
+          DEPLOY_HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL || 'https://slides.corrode.dev/healthz' }}
         run: >-
           curl
           --fail
@@ -152,3 +305,66 @@ jobs:
           --retry-max-time 120
           --max-time 10
           "${DEPLOY_HEALTHCHECK_URL}"
+
+      - name: Seed the Intro to Rust deck
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          SLIDES_BASE_URL: https://slides.corrode.dev
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cookie_jar="$(mktemp)"
+          trap 'rm -f "${cookie_jar}"' EXIT
+
+          curl "${SLIDES_BASE_URL}/admin/login" \
+            --request POST \
+            --data-urlencode "password=${ADMIN_TOKEN}" \
+            --cookie-jar "${cookie_jar}" \
+            --fail \
+            --show-error \
+            --silent \
+            --output /dev/null
+
+          if ! grep --quiet 'slides_admin' "${cookie_jar}"; then
+            echo "Production admin login did not set the expected session cookie." >&2
+            exit 1
+          fi
+
+          editor_status="$(curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/edit" \
+            --cookie "${cookie_jar}" \
+            --output /dev/null \
+            --show-error \
+            --silent \
+            --write-out '%{http_code}')"
+          if [ "${editor_status}" = "404" ]; then
+            curl "${SLIDES_BASE_URL}/admin/decks" \
+              --request POST \
+              --cookie "${cookie_jar}" \
+              --data-urlencode "title=Intro to Rust" \
+              --data-urlencode "slug=intro-to-rust" \
+              --fail \
+              --show-error \
+              --silent \
+              --output /dev/null
+
+            curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/publish" \
+              --request POST \
+              --cookie "${cookie_jar}" \
+              --data-urlencode "title=Intro to Rust" \
+              --data-urlencode "source@examples/intro-to-rust.md" \
+              --data-urlencode "font=system" \
+              --data-urlencode "background=#1e1e2e" \
+              --data-urlencode "text=#cdd6f4" \
+              --data-urlencode "accent=#f9e2af" \
+              --fail \
+              --show-error \
+              --silent \
+              --output /dev/null
+            echo "Published the Intro to Rust deck."
+          elif [ "${editor_status}" = "200" ]; then
+            echo "The Intro to Rust deck is already present."
+          else
+            echo "Unexpected editor response: HTTP ${editor_status}." >&2
+            exit 1
+          fi

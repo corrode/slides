@@ -1,4 +1,9 @@
-use std::{io::Cursor, sync::OnceLock};
+use std::{
+    fs,
+    io::Cursor,
+    path::{Component, Path},
+    sync::OnceLock,
+};
 
 use anyhow::{Context, Result, bail};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html};
@@ -74,34 +79,137 @@ struct Fence {
     length: usize,
 }
 
+fn fence_start(line: &str) -> Option<(Fence, &str)> {
+    let indentation = line.len() - line.trim_start().len();
+    if indentation > 3 {
+        return None;
+    }
+    let trimmed = line.trim_start();
+    let marker @ (b'`' | b'~') = trimmed.bytes().next()? else {
+        return None;
+    };
+    let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
+    (length >= 3).then(|| (Fence { marker, length }, trimmed[length..].trim()))
+}
+
+fn fence_end(line: &str, fence: Fence) -> bool {
+    let trimmed = line.trim_start();
+    let run = trimmed
+        .bytes()
+        .take_while(|byte| *byte == fence.marker)
+        .count();
+    run >= fence.length && trimmed[run..].trim().is_empty()
+}
+
 fn inside_fence(line: &str, fence: &mut Option<Fence>) -> bool {
     if let Some(active) = *fence {
-        let trimmed = line.trim_start();
-        let run = trimmed
-            .bytes()
-            .take_while(|byte| *byte == active.marker)
-            .count();
-        if run >= active.length && trimmed[run..].trim().is_empty() {
+        if fence_end(line, active) {
             *fence = None;
         }
         return true;
     }
 
-    let indentation = line.len() - line.trim_start().len();
-    if indentation > 3 {
-        return false;
-    }
-    let trimmed = line.trim_start();
-    let Some(marker @ (b'`' | b'~')) = trimmed.bytes().next() else {
-        return false;
-    };
-    let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
-    if length >= 3 {
-        *fence = Some(Fence { marker, length });
+    if let Some((opening, _)) = fence_start(line) {
+        *fence = Some(opening);
         true
     } else {
         false
     }
+}
+
+pub fn resolve_code_references(source: &str) -> Result<String> {
+    resolve_code_references_from(source, Path::new("examples"))
+}
+
+fn resolve_code_references_from(source: &str, presentation_root: &Path) -> Result<String> {
+    let lines: Vec<&str> = source.split_inclusive('\n').collect();
+    let mut output = String::with_capacity(source.len());
+    let mut regular_fence = None;
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if regular_fence.is_some() {
+            inside_fence(line, &mut regular_fence);
+            output.push_str(line);
+            index += 1;
+            continue;
+        }
+
+        let Some((fence, info)) = fence_start(line) else {
+            output.push_str(line);
+            index += 1;
+            continue;
+        };
+        let mut tokens = info.split_whitespace();
+        let Some(language) = tokens.next() else {
+            regular_fence = Some(fence);
+            output.push_str(line);
+            index += 1;
+            continue;
+        };
+        let Some(reference) = tokens.next().filter(|token| token.starts_with("code/")) else {
+            regular_fence = Some(fence);
+            output.push_str(line);
+            index += 1;
+            continue;
+        };
+        if tokens.next().is_some() {
+            bail!("a code reference fence accepts only a language and code path");
+        }
+
+        let indentation = line.len() - line.trim_start().len();
+        output.push_str(&line[..indentation]);
+        output.extend(std::iter::repeat_n(char::from(fence.marker), fence.length));
+        output.push_str(language);
+        output.push('\n');
+
+        index += 1;
+        while index < lines.len() && !fence_end(lines[index], fence) {
+            if !lines[index].trim().is_empty() {
+                bail!("code reference {reference:?} cannot also contain inline code");
+            }
+            index += 1;
+        }
+        if index == lines.len() {
+            bail!("code reference {reference:?} is missing its closing fence");
+        }
+
+        let code = read_code_reference(presentation_root, reference)?;
+        if code.lines().any(|line| fence_end(line, fence)) {
+            bail!("code reference {reference:?} contains the closing fence marker");
+        }
+        output.push_str(&code);
+        if !code.is_empty() && !code.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(lines[index]);
+        index += 1;
+    }
+
+    Ok(output)
+}
+
+fn read_code_reference(presentation_root: &Path, reference: &str) -> Result<String> {
+    let relative = Path::new(reference);
+    let mut components = relative.components();
+    let inside_code = matches!(
+        components.next(),
+        Some(Component::Normal(component)) if component == "code"
+    ) && components.all(|component| matches!(component, Component::Normal(_)));
+    if !inside_code {
+        bail!("code references must stay inside the code/ directory");
+    }
+
+    let code_root = fs::canonicalize(presentation_root.join("code"))
+        .context("could not resolve the presentation code directory")?;
+    let path = fs::canonicalize(presentation_root.join(relative))
+        .with_context(|| format!("could not resolve code reference {reference:?}"))?;
+    if !path.starts_with(&code_root) {
+        bail!("code references must stay inside the code/ directory");
+    }
+    fs::read_to_string(&path)
+        .with_context(|| format!("could not read code reference {reference:?} as UTF-8"))
 }
 
 fn split_slides(source: &str) -> Vec<&str> {
@@ -131,7 +239,8 @@ fn split_slides(source: &str) -> Vec<&str> {
 }
 
 fn parse_slide(source: &str) -> Result<Slide> {
-    let (markdown, interaction) = extract_interaction(source)?;
+    let source = resolve_code_references(source)?;
+    let (markdown, interaction) = extract_interaction(&source)?;
     Ok(Slide {
         html: render_markdown(&markdown),
         interaction,
@@ -613,6 +722,47 @@ mod tests {
         assert_eq!(deck.slides.len(), 2);
         assert!(deck.slides[0].interaction.is_none());
         assert!(deck.slides[0].html.contains(":::poll"));
+    }
+
+    #[test]
+    fn resolves_code_files_inside_the_presentation_code_directory() {
+        let source = "```python code/word-count/python/step_01.py\n```";
+
+        let resolved = resolve_code_references(source).unwrap();
+        let deck = parse_deck(source).unwrap();
+
+        assert!(resolved.starts_with("```python\n"));
+        assert!(resolved.contains("def count_words(filename):"));
+        assert!(!resolved.contains("code/word-count"));
+        assert!(deck.slides[0].html.contains("count_words"));
+    }
+
+    #[test]
+    fn code_references_reject_inline_content_and_path_traversal() {
+        let inline = "```python code/word-count/python/step_01.py\nprint('ambiguous')\n```";
+        let traversal = "```text code/../intro-to-rust.md\n```";
+
+        assert!(
+            resolve_code_references(inline)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot also contain inline code")
+        );
+        assert!(
+            resolve_code_references(traversal)
+                .unwrap_err()
+                .to_string()
+                .contains("must stay inside the code/ directory")
+        );
+    }
+
+    #[test]
+    fn code_reference_errors_identify_the_slide() {
+        let source = "# First\n\n---\n\n```rust code/word-count/rust/does-not-exist.rs\n```";
+
+        let error = parse_deck(source).unwrap_err();
+
+        assert!(error.to_string().contains("slide 2"));
     }
 
     #[test]

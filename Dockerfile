@@ -25,6 +25,7 @@ WORKDIR /app
 
 COPY --from=builder --chown=slides:slides /build/target/release/slides /usr/local/bin/slides
 COPY --from=builder --chown=slides:slides /build/assets ./assets
+COPY --from=builder --chown=slides:slides /build/examples ./examples
 
 ENV SLIDES_BIND=0.0.0.0:3000 \
     SLIDES_DATABASE_URL=sqlite://data/slides.db \

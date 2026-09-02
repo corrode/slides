@@ -59,6 +59,19 @@ The content parser supports CommonMark plus:
 
 The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text.
 
+### Referenced code files
+
+Executable examples can live beside the presentations under `examples/code/` and be referenced as the second token of an otherwise empty code fence:
+
+````markdown
+```python code/word-count/python/step_01.py
+```
+````
+
+The first token selects syntax highlighting. The second is a path relative to `examples/` and must remain inside `code/`; absolute paths, parent-directory traversal, symlink escapes, missing files, non-UTF-8 files, extra fence arguments, and fences that also contain inline code are rejected.
+
+Draft previews read the current file. Publishing expands references into ordinary inline code fences in the immutable version, so later file edits do not change an already published presentation.
+
 Raw HTML is escaped and displayed as text. It is never executed. Link and image destinations may use:
 
 - relative paths;

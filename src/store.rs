@@ -146,7 +146,8 @@ pub async fn save_and_publish_deck(
     pool: &SqlitePool,
     deck_id: i64,
     title: &str,
-    source: &str,
+    draft_source: &str,
+    published_source: &str,
     font: &str,
     background: &str,
     text: &str,
@@ -161,7 +162,7 @@ pub async fn save_and_publish_deck(
            WHERE id = ?"#,
     )
     .bind(title)
-    .bind(source)
+    .bind(draft_source)
     .bind(font)
     .bind(background)
     .bind(text)
@@ -186,7 +187,7 @@ pub async fn save_and_publish_deck(
     .bind(deck_id)
     .bind(version_number)
     .bind(title)
-    .bind(source)
+    .bind(published_source)
     .bind(font)
     .bind(background)
     .bind(text)
@@ -662,11 +663,13 @@ mod tests {
         assert!(theme_style.contains("--highlight:#f9e2af"));
         assert!(!theme_style.contains("gradient"));
 
+        let published_source = "# Published snapshot";
         let version_id = save_and_publish_deck(
             &pool,
             deck.id,
             &deck.title,
             &deck.draft_source,
+            published_source,
             &deck.theme_font,
             &deck.theme_background,
             &deck.theme_text,
@@ -674,6 +677,18 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(
+            get_deck(&pool, deck.id).await.unwrap().draft_source,
+            deck.draft_source
+        );
+        assert_eq!(
+            latest_version(&pool, deck.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .source,
+            published_source
+        );
         let session = start_session(&pool, deck.id, version_id).await.unwrap();
 
         replace_answer(&pool, session.id, 0, "participant", "poll", "0")

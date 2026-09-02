@@ -59,12 +59,15 @@ The current live-update hub is process-local. Run exactly one application replic
 
 `.github/workflows/ci.yml` formats, lints, and tests Rust; builds the Docker image for pull requests; and publishes `latest` plus commit-SHA tags to GHCR from `main`.
 
-A push to `main` deploys through Coolify when these repository settings exist:
+A push to `main` also provisions and deploys the application through Coolify. The first deployment finds `corrode1`, creates a Slides project and persistent `/app/data` volume when needed, and uses a Coolify GitHub App with access to the private `corrode/slides` repository. Later deployments reuse the application. The workflow requires:
 
-- variable `COOLIFY_RESOURCE_UUID`: the Slides application resource UUID;
+- secret `COOLIFY_TOKEN`: a Coolify API token with read, write, and deploy access;
+- secret `ADMIN_TOKEN`: the production presenter password;
+- optional variable `COOLIFY_RESOURCE_UUID`: skips resource discovery after the first deployment;
 - optional variable `COOLIFY_BASE_URL`: defaults to `https://admin.corrode.dev`;
-- optional variable `DEPLOY_HEALTHCHECK_URL`: the public URL ending in `/healthz`;
-- secret `COOLIFY_TOKEN`: an API token allowed to deploy that resource.
+- optional variable `DEPLOY_HEALTHCHECK_URL`: defaults to `https://slides.corrode.dev/healthz`.
+
+When the production database is empty, the workflow also creates and publishes `examples/intro-to-rust.md`. Existing decks are left unchanged.
 
 ## Database migrations
 
@@ -75,6 +78,15 @@ SQLx verifies applied migrations by checksum. Once a migration has been run anyw
 The normative format specification and research notes are in [`docs/slide-format.md`](docs/slide-format.md). A complete, ready-to-present showcase is available at [`examples/kitchen-sink.md`](examples/kitchen-sink.md).
 
 Decks use `---` separators, CommonMark content, fenced code blocks, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+
+Code shipped beside presentations under `examples/code/` can be included with an empty fence:
+
+````markdown
+```python code/path/to/example.py
+```
+````
+
+Drafts read the file directly; publishing snapshots its contents into the immutable deck version.
 
 HTMX 4.0.0 and its `hx-sse` extension are vendored under `assets/`; the app has no frontend build step. The files come from the official `htmx.org@4.0.0` jsDelivr package. Their SHA-256 checksums are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f` and `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, respectively.
 
