@@ -31,7 +31,6 @@ pub struct EndedSessionSummary {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct DeckVersion {
-    pub id: i64,
     pub title: String,
     pub source: String,
     pub theme_font: String,

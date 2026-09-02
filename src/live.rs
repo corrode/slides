@@ -24,7 +24,13 @@ pub enum LiveUpdate {
 pub struct SessionRuntime {
     pub mutation: Mutex<()>,
     revision: AtomicU64,
+    viewers: AtomicU64,
     updates: broadcast::Sender<LiveUpdate>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AudienceConnection {
+    runtime: Arc<SessionRuntime>,
 }
 
 impl LiveHub {
@@ -57,6 +63,7 @@ impl SessionRuntime {
         Self {
             mutation: Mutex::new(()),
             revision: AtomicU64::new(0),
+            viewers: AtomicU64::new(0),
             updates,
         }
     }
@@ -69,9 +76,36 @@ impl SessionRuntime {
         self.revision.load(Ordering::Acquire)
     }
 
+    pub fn viewer_count(&self) -> u64 {
+        self.viewers.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn track_audience(self: &Arc<Self>) -> AudienceConnection {
+        self.viewers.fetch_add(1, Ordering::AcqRel);
+        self.notify(LiveUpdate::Content);
+        AudienceConnection {
+            runtime: Arc::clone(self),
+        }
+    }
+
     fn notify(&self, update: LiveUpdate) {
         self.revision.fetch_add(1, Ordering::Release);
         let _ = self.updates.send(update);
+    }
+}
+
+impl Drop for AudienceConnection {
+    fn drop(&mut self) {
+        let decremented = self
+            .runtime
+            .viewers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok();
+        if decremented {
+            self.runtime.notify(LiveUpdate::Content);
+        }
     }
 }
 
@@ -102,5 +136,20 @@ mod tests {
         hub.notify(1, LiveUpdate::Content).await;
 
         assert_eq!(hub.runtime(1).await.revision(), 1);
+    }
+
+    #[tokio::test]
+    async fn tracks_active_audience_connections() {
+        let hub = LiveHub::default();
+        let runtime = hub.runtime(1).await;
+        let mut updates = runtime.subscribe();
+
+        let connection = runtime.track_audience();
+        assert_eq!(runtime.viewer_count(), 1);
+        assert_eq!(updates.recv().await.unwrap(), LiveUpdate::Content);
+
+        drop(connection);
+        assert_eq!(runtime.viewer_count(), 0);
+        assert_eq!(updates.recv().await.unwrap(), LiveUpdate::Content);
     }
 }

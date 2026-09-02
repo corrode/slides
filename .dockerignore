@@ -1,6 +1,13 @@
 .git
 .gitignore
 target
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+fuzz/coverage
+.tmp-ui
+.screenshots
+.docker-anonymous
 data
 *.db
 *.db-shm

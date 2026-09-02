@@ -22,6 +22,7 @@ pub struct DeckDocument {
 pub struct Slide {
     pub html: String,
     pub interaction: Option<Interaction>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,17 +241,19 @@ fn split_slides(source: &str) -> Vec<&str> {
 
 fn parse_slide(source: &str) -> Result<Slide> {
     let source = resolve_code_references(source)?;
-    let (markdown, interaction) = extract_interaction(&source)?;
+    let (markdown, interaction, notes) = extract_directives(&source)?;
     Ok(Slide {
         html: render_markdown(&markdown),
         interaction,
+        notes: notes.map(|notes| render_markdown(&notes)),
     })
 }
 
-fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
+fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Option<String>)> {
     let lines: Vec<&str> = source.lines().collect();
     let mut output = Vec::new();
     let mut interaction = None;
+    let mut notes = None;
     let mut index = 0;
     let mut fence = None;
 
@@ -261,14 +264,12 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
             continue;
         }
         let line = lines[index].trim();
-        let Some(kind) = interaction_kind(line) else {
+        let interaction_name = interaction_kind(line);
+        let is_notes = directive_name(line) == Some("notes");
+        if interaction_name.is_none() && !is_notes {
             output.push(lines[index]);
             index += 1;
             continue;
-        };
-
-        if interaction.is_some() {
-            bail!("only one interactive block is allowed per slide");
         }
 
         let header = line.to_owned();
@@ -282,24 +283,47 @@ fn extract_interaction(source: &str) -> Result<(String, Option<Interaction>)> {
             index += 1;
         }
         if index == lines.len() {
-            bail!("interactive block is missing its closing :::");
+            let name = if is_notes {
+                "presenter notes"
+            } else {
+                "interactive"
+            };
+            bail!("{name} block is missing its closing :::");
         }
         index += 1;
 
-        interaction = Some(match kind {
-            "poll" => parse_poll(&header, &body)?,
-            "wordcloud" => parse_word_cloud(&header, &body)?,
-            "quiz" => parse_quiz(&header, &body)?,
-            "ordering" => parse_ordering(&header, &body)?,
-            _ => unreachable!(),
+        if is_notes {
+            if header != ":::notes" {
+                bail!("a presenter notes block does not accept arguments");
+            }
+            if notes.is_some() {
+                bail!("only one presenter notes block is allowed per slide");
+            }
+            notes = Some(body.join("\n").trim().to_owned());
+            continue;
+        }
+
+        if interaction.is_some() {
+            bail!("only one interactive block is allowed per slide");
+        }
+        interaction = Some(match interaction_name {
+            Some("poll") => parse_poll(&header, &body)?,
+            Some("wordcloud") => parse_word_cloud(&header, &body)?,
+            Some("quiz") => parse_quiz(&header, &body)?,
+            Some("ordering") => parse_ordering(&header, &body)?,
+            Some(_) | None => unreachable!(),
         });
     }
 
-    Ok((output.join("\n"), interaction))
+    Ok((output.join("\n"), interaction, notes))
+}
+
+fn directive_name(line: &str) -> Option<&str> {
+    line.strip_prefix(":::")?.split_whitespace().next()
 }
 
 fn interaction_kind(line: &str) -> Option<&'static str> {
-    match line.strip_prefix(":::")?.split_whitespace().next()? {
+    match directive_name(line)? {
         "poll" => Some("poll"),
         "wordcloud" => Some("wordcloud"),
         "quiz" => Some("quiz"),
@@ -617,8 +641,13 @@ fn highlight_code(language: &str, code: &str) -> String {
         .find_syntax_by_token(language)
         .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
 
-    highlighted_html_for_string(code, syntaxes, syntax, theme)
-        .unwrap_or_else(|_| format!("<pre><code>{}</code></pre>", html_escape::encode_text(code)))
+    let highlighted = highlighted_html_for_string(code, syntaxes, syntax, theme)
+        .unwrap_or_else(|_| format!("<pre><code>{}</code></pre>", html_escape::encode_text(code)));
+    if matches!(language.trim().to_ascii_lowercase().as_str(), "rust" | "rs") {
+        format!("<div class=\"rust-code\" data-rust-code>{highlighted}</div>")
+    } else {
+        highlighted
+    }
 }
 
 #[cfg(test)]
@@ -635,6 +664,8 @@ mod tests {
         assert!(html.contains("#cba6f7"));
         assert!(html.contains("#a6e3a1"));
         assert!(html.contains("#fab387"));
+        assert!(html.contains("data-rust-code"));
+        assert!(!highlight_code("python", "print('hello')\n").contains("data-rust-code"));
     }
 
     #[test]
@@ -729,6 +760,52 @@ mod tests {
             Some(Interaction::Ordering { prompt, options })
                 if prompt == "Put the release steps in order" && options.len() == 3
         ));
+    }
+
+    #[test]
+    fn parses_sanitized_presenter_notes_separately_from_slide_content() {
+        let deck = parse_deck(
+            "# Ownership\n\n:::notes\nRemind everyone about **moves**.\n\n<script>alert('no')</script>\n:::",
+        )
+        .unwrap();
+        let slide = &deck.slides[0];
+
+        assert!(slide.html.contains("<h1>Ownership</h1>"));
+        assert!(!slide.html.contains("Remind everyone"));
+        let notes = slide.notes.as_deref().unwrap();
+        assert!(notes.contains("<strong>moves</strong>"));
+        assert!(!notes.contains("<script>"));
+    }
+
+    #[test]
+    fn presenter_notes_can_coexist_with_an_interaction() {
+        let deck = parse_deck(
+            ":::poll\n- Rust\n- Go\n:::\n\n:::notes\nAsk for a show of hands first.\n:::",
+        )
+        .unwrap();
+
+        assert!(deck.slides[0].interaction.is_some());
+        assert!(deck.slides[0].notes.is_some());
+    }
+
+    #[test]
+    fn validates_presenter_notes_blocks() {
+        for source in [
+            ":::notes speaker=\"me\"\nNo arguments.\n:::",
+            ":::notes\nFirst\n:::\n:::notes\nSecond\n:::",
+            ":::notes\nMissing close",
+        ] {
+            let error = parse_deck(source).unwrap_err();
+            assert!(error.to_string().contains("slide 1"));
+        }
+    }
+
+    #[test]
+    fn ignores_presenter_notes_markers_inside_code_fences() {
+        let deck = parse_deck("```markdown\n:::notes\nNot notes\n:::\n```").unwrap();
+
+        assert!(deck.slides[0].notes.is_none());
+        assert!(deck.slides[0].html.contains(":::notes"));
     }
 
     #[test]

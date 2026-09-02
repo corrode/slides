@@ -23,7 +23,7 @@ RUN cargo build --locked --release
 FROM debian:trixie-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends curl \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 slides \
     && useradd --system --uid 10001 --gid slides --home-dir /app --shell /usr/sbin/nologin slides \

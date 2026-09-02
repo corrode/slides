@@ -24,7 +24,7 @@ use crate::{
     web::{AppState, is_admin, participant_hash, require_admin, template},
 };
 
-use super::render::{self, LiveView};
+use super::render::{self, LiveRequest, LiveView};
 
 #[derive(Template)]
 #[template(path = "landing.html")]
@@ -90,6 +90,16 @@ pub struct ReactionForm {
     slide: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QuestionForm {
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QuestionActionForm {
+    action: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionMarker {
     slide: i64,
@@ -149,14 +159,18 @@ pub async fn audience(
     let document = parse_deck(&version.source)?;
 
     let (jar, participant) = ensure_participant(jar, &state);
+    let viewers = state.hub.runtime(session.id).await.viewer_count();
     let initial_live = render::live(
         &state.pool,
         &session,
         &version,
         &document,
-        LiveView::Audience,
-        Some(&participant),
-        query.slide,
+        LiveRequest {
+            view: LiveView::Audience,
+            participant_hash: Some(&participant),
+            requested_slide: query.slide,
+            viewers,
+        },
     )
     .await?;
     let events_url = match query.slide {
@@ -186,14 +200,18 @@ pub async fn presenter(
     let session = required_session(&state, &code).await?;
     let version = store::get_version(&state.pool, session.deck_version_id).await?;
     let document = parse_deck(&version.source)?;
+    let viewers = state.hub.runtime(session.id).await.viewer_count();
     let initial_live = render::live(
         &state.pool,
         &session,
         &version,
         &document,
-        LiveView::Presenter,
-        None,
-        None,
+        LiveRequest {
+            view: LiveView::Presenter,
+            participant_hash: None,
+            requested_slide: None,
+            viewers,
+        },
     )
     .await?;
     template(PresenterTemplate {
@@ -223,6 +241,7 @@ pub async fn events(
     };
     let participant = participant_hash(&jar);
     let runtime = state.hub.runtime(session.id).await;
+    let audience_connection = (view == LiveView::Audience).then(|| runtime.track_audience());
     let mut updates = runtime.subscribe();
     let session = store::get_session(&state.pool, session.id).await?;
     let mut requested_slide = historical_slide(
@@ -237,6 +256,7 @@ pub async fn events(
     let mut last_marker = SessionMarker::from(&session);
 
     let events = stream! {
+        let _audience_connection = audience_connection;
         let mut reconcile = tokio::time::interval(Duration::from_secs(1));
         reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         reconcile.tick().await;
@@ -516,6 +536,92 @@ pub async fn answer(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+pub async fn ask_question(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+    Form(form): Form<QuestionForm>,
+) -> AppResult<Response> {
+    const MAX_QUESTIONS_PER_PARTICIPANT: i64 = 5;
+    const MAX_QUESTION_LENGTH: usize = 280;
+
+    let participant = participant_hash(&jar).ok_or_else(|| {
+        AppError::bad_request("Reload the presentation before asking a question.")
+    })?;
+    let body = form.body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if body.is_empty() || body.chars().count() > MAX_QUESTION_LENGTH {
+        return Err(AppError::bad_request(format!(
+            "Questions must contain between 1 and {MAX_QUESTION_LENGTH} characters."
+        )));
+    }
+
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    let session = store::get_session(&state.pool, session.id).await?;
+    if session.ended_at.is_some() {
+        return Err(AppError::bad_request("This presentation has ended."));
+    }
+    if store::participant_question_count(&state.pool, session.id, &participant).await?
+        >= MAX_QUESTIONS_PER_PARTICIPANT
+    {
+        return Err(AppError::bad_request(
+            "You have reached the five-question limit for this presentation.",
+        ));
+    }
+
+    store::create_question(&state.pool, session.id, &participant, &body).await?;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn toggle_question_upvote(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path((code, question_id)): Path<(String, i64)>,
+) -> AppResult<Response> {
+    let participant = participant_hash(&jar)
+        .ok_or_else(|| AppError::bad_request("Reload the presentation before voting."))?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    let session = store::get_session(&state.pool, session.id).await?;
+    if session.ended_at.is_some() {
+        return Err(AppError::bad_request("This presentation has ended."));
+    }
+
+    store::toggle_question_upvote(&state.pool, session.id, question_id, &participant).await?;
+    state.hub.notify(session.id, LiveUpdate::Content).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn moderate_question(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path((code, question_id)): Path<(String, i64)>,
+    Form(form): Form<QuestionActionForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    let changed = match form.action.as_str() {
+        "answered" => {
+            store::set_question_answered(&state.pool, session.id, question_id, true).await?
+        }
+        "unanswered" => {
+            store::set_question_answered(&state.pool, session.id, question_id, false).await?
+        }
+        "dismiss" => store::dismiss_question(&state.pool, session.id, question_id).await?,
+        _ => return Err(AppError::bad_request("Unknown question action.")),
+    };
+    if !changed {
+        return Err(AppError::bad_request("Question not found."));
+    }
+    state.hub.notify(session.id, LiveUpdate::Content).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 pub async fn react(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -643,14 +749,18 @@ async fn snapshot(
     let version = store::get_version(&state.pool, session.deck_version_id).await?;
     let document = parse_deck(&version.source)?;
     let marker = SessionMarker::from(&session);
+    let viewers = state.hub.runtime(session.id).await.viewer_count();
     let fragment = render::live(
         &state.pool,
         &session,
         &version,
         &document,
-        view,
-        participant,
-        requested_slide,
+        LiveRequest {
+            view,
+            participant_hash: participant,
+            requested_slide,
+            viewers,
+        },
     )
     .await?;
     Ok((fragment, marker, requested_slide))

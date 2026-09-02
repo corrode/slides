@@ -4,12 +4,12 @@ A server-rendered interactive presentation app built with Rust, Axum, SQLite, an
 
 The current vertical slice supports:
 
-- Markdown decks separated by `---`
-- Highlighted fenced code blocks, including Rust
+- Markdown decks separated by `---`, with presenter-only notes
+- Highlighted fenced code blocks, with sandboxed Rust execution through `play.rust-lang.org`
 - Unsaved preview, saved drafts, and immutable published versions
 - Named shortlinks, automatically derived from deck titles when omitted, and six-digit live-session codes
 - Presenter-controlled slide navigation, keyboard shortcuts, audience locking, and attention recall
-- Anonymous polls, word clouds, quizzes, card ordering, raised hands, and rate-limited reactions
+- Anonymous polls, word clouds, quizzes, card ordering, raised hands, audience questions with upvotes, and rate-limited reactions
 - Live horizontal and vertical result charts over Server-Sent Events
 - Responsive presenter and audience views
 - Structured font and color themes
@@ -22,6 +22,14 @@ SLIDES_ADMIN_PASSWORD=change-me cargo run
 
 Open <http://127.0.0.1:3000>. The SQLite database is created as `slides.db` by default.
 
+Validate a presentation without starting the server:
+
+```sh
+cargo run -- validate examples/intro-to-rust.md
+```
+
+The command checks the Markdown and interaction syntax, semantic interaction rules, and referenced code files. It exits unsuccessfully with a slide-specific error when validation fails.
+
 Configuration:
 
 - `SLIDES_ADMIN_PASSWORD`: required presenter password
@@ -33,7 +41,7 @@ Configuration:
 
 `GET /healthz` returns `200 OK` when the process can query SQLite and `503 Service Unavailable` otherwise.
 
-Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide.
+Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 
 ## Docker
 
@@ -77,7 +85,7 @@ SQLx verifies applied migrations by checksum. Once a migration has been run anyw
 
 The normative format specification and research notes are in [`docs/slide-format.md`](docs/slide-format.md). A complete, ready-to-present showcase is available at [`examples/kitchen-sink.md`](examples/kitchen-sink.md).
 
-Decks use `---` separators, CommonMark content, fenced code blocks, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+Decks use `---` separators, CommonMark content, fenced code blocks, optional `:::notes` presenter notes, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
 
 Code shipped beside presentations under `examples/code/` can be included with an empty fence:
 
@@ -87,6 +95,8 @@ Code shipped beside presentations under `examples/code/` can be included with an
 ````
 
 Drafts read the file directly; publishing snapshots its contents into the immutable deck version.
+
+Running a Rust code block sends that block's source through the Slides server to the public Rust Playground. The Slides container therefore needs outbound HTTPS access to `play.rust-lang.org`; the code runs in the Playground sandbox, not on the Slides host.
 
 HTMX 4.0.0 and its `hx-sse` extension are vendored under `assets/`; the app has no frontend build step. The files come from the official `htmx.org@4.0.0` jsDelivr package. Their SHA-256 checksums are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f` and `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, respectively.
 

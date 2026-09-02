@@ -42,6 +42,14 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-targets
 
+      - name: Validate browser JavaScript
+        run: node --check assets/app.js
+
+      - name: Validate example presentations
+        run: |
+          cargo run --locked -- validate examples/intro-to-rust.md
+          cargo run --locked -- validate examples/kitchen-sink.md
+
   image:
     name: Build and publish container image
     runs-on: ubuntu-latest

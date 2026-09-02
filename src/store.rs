@@ -40,6 +40,15 @@ pub struct SessionArtifact {
     pub title: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct QuestionRow {
+    pub(crate) id: i64,
+    pub(crate) body: String,
+    pub(crate) answered: bool,
+    pub(crate) vote_count: i64,
+    pub(crate) participant_upvoted: bool,
+}
+
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(database_url)?
         .create_if_missing(true)
@@ -221,21 +230,9 @@ pub async fn save_and_publish_deck(
     Ok(id)
 }
 
-pub async fn latest_version(pool: &SqlitePool, deck_id: i64) -> Result<Option<DeckVersion>> {
-    Ok(sqlx::query_as::<_, DeckVersion>(
-        r#"SELECT id, deck_id, title, source, theme_font, theme_background,
-                  theme_text, theme_accent
-           FROM deck_versions WHERE deck_id = ? ORDER BY version_number DESC LIMIT 1"#,
-    )
-    .bind(deck_id)
-    .fetch_optional(pool)
-    .await?)
-}
-
 pub async fn get_version(pool: &SqlitePool, id: i64) -> Result<DeckVersion> {
     Ok(sqlx::query_as::<_, DeckVersion>(
-        r#"SELECT id, deck_id, title, source, theme_font, theme_background,
-                  theme_text, theme_accent
+        r#"SELECT title, source, theme_font, theme_background, theme_text, theme_accent
            FROM deck_versions WHERE id = ?"#,
     )
     .bind(id)
@@ -397,6 +394,145 @@ pub async fn session_started_at(pool: &SqlitePool, id: i64) -> Result<i64> {
             .fetch_one(pool)
             .await?,
     )
+}
+
+pub(crate) async fn create_question(
+    pool: &SqlitePool,
+    session_id: i64,
+    participant_hash: &str,
+    body: &str,
+) -> Result<QuestionRow> {
+    Ok(sqlx::query_as::<_, QuestionRow>(
+        r#"INSERT INTO questions (session_id, participant_hash, body, created_at)
+           VALUES (?, ?, ?, ?)
+           RETURNING id, body, answered, 0 AS vote_count, 0 AS participant_upvoted"#,
+    )
+    .bind(session_id)
+    .bind(participant_hash)
+    .bind(body)
+    .bind(now_millis())
+    .fetch_one(pool)
+    .await?)
+}
+
+pub(crate) async fn participant_question_count(
+    pool: &SqlitePool,
+    session_id: i64,
+    participant_hash: &str,
+) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM questions WHERE session_id = ? AND participant_hash = ?",
+    )
+    .bind(session_id)
+    .bind(participant_hash)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub(crate) async fn list_visible_questions(
+    pool: &SqlitePool,
+    session_id: i64,
+    participant_hash: &str,
+) -> Result<Vec<QuestionRow>> {
+    Ok(sqlx::query_as::<_, QuestionRow>(
+        r#"SELECT q.id, q.body, q.answered, COUNT(v.question_id) AS vote_count,
+                  EXISTS (
+                      SELECT 1 FROM question_votes participant_vote
+                      WHERE participant_vote.question_id = q.id
+                        AND participant_vote.participant_hash = ?
+                  ) AS participant_upvoted
+           FROM questions q
+           LEFT JOIN question_votes v ON v.question_id = q.id
+           WHERE q.session_id = ? AND q.hidden = 0
+           GROUP BY q.id
+           ORDER BY q.answered, vote_count DESC, q.created_at, q.id"#,
+    )
+    .bind(participant_hash)
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub(crate) async fn toggle_question_upvote(
+    pool: &SqlitePool,
+    session_id: i64,
+    question_id: i64,
+    participant_hash: &str,
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    let removed = sqlx::query(
+        r#"DELETE FROM question_votes
+           WHERE question_id = ? AND participant_hash = ?
+             AND EXISTS (
+                 SELECT 1 FROM questions q
+                 WHERE q.id = question_votes.question_id AND q.session_id = ?
+             )"#,
+    )
+    .bind(question_id)
+    .bind(participant_hash)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?;
+    if removed.rows_affected() > 0 {
+        tx.commit().await?;
+        return Ok(false);
+    }
+
+    let inserted = sqlx::query(
+        r#"INSERT INTO question_votes (question_id, participant_hash, created_at)
+           SELECT q.id, ?, ? FROM questions q
+           WHERE q.id = ? AND q.session_id = ?"#,
+    )
+    .bind(participant_hash)
+    .bind(now_millis())
+    .bind(question_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        bail!("question does not belong to session");
+    }
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub(crate) async fn set_question_answered(
+    pool: &SqlitePool,
+    session_id: i64,
+    question_id: i64,
+    answered: bool,
+) -> Result<bool> {
+    let updated = sqlx::query(
+        r#"UPDATE questions
+           SET answered = ?,
+               answered_at = CASE WHEN ? THEN COALESCE(answered_at, ?) ELSE NULL END
+           WHERE id = ? AND session_id = ?"#,
+    )
+    .bind(answered)
+    .bind(answered)
+    .bind(now_millis())
+    .bind(question_id)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() > 0)
+}
+
+pub(crate) async fn dismiss_question(
+    pool: &SqlitePool,
+    session_id: i64,
+    question_id: i64,
+) -> Result<bool> {
+    let updated = sqlx::query(
+        r#"UPDATE questions SET hidden = 1, hidden_at = COALESCE(hidden_at, ?)
+           WHERE id = ? AND session_id = ?"#,
+    )
+    .bind(now_millis())
+    .bind(question_id)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() > 0)
 }
 
 pub async fn artifact_for_session(
@@ -737,6 +873,24 @@ mod tests {
     use super::*;
     use crate::models::Theme;
 
+    async fn start_test_session(pool: &SqlitePool, slug: &str) -> LiveSession {
+        let deck = create_deck(pool, slug, slug).await.unwrap();
+        let version_id = save_and_publish_deck(
+            pool,
+            deck.id,
+            &deck.title,
+            &deck.draft_source,
+            &deck.draft_source,
+            &deck.theme_font,
+            &deck.theme_background,
+            &deck.theme_text,
+            &deck.theme_accent,
+        )
+        .await
+        .unwrap();
+        start_session(pool, deck.id, version_id).await.unwrap()
+    }
+
     #[tokio::test]
     async fn publishes_and_runs_a_session() {
         let directory = tempfile::tempdir().unwrap();
@@ -774,11 +928,7 @@ mod tests {
             deck.draft_source
         );
         assert_eq!(
-            latest_version(&pool, deck.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .source,
+            get_version(&pool, version_id).await.unwrap().source,
             published_source
         );
         let session = start_session(&pool, deck.id, version_id).await.unwrap();
@@ -868,6 +1018,145 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn persists_session_questions_and_upvotes() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+        let session = start_test_session(&pool, "questions").await;
+
+        let first = create_question(&pool, session.id, "alice", "How does this scale?")
+            .await
+            .unwrap();
+        let second = create_question(&pool, session.id, "bob", "Can you show an example?")
+            .await
+            .unwrap();
+        let third = create_question(&pool, session.id, "alice", "Will slides be shared?")
+            .await
+            .unwrap();
+        assert_eq!(first.body, "How does this scale?");
+        assert!(!first.answered);
+        assert_eq!(first.vote_count, 0);
+        assert!(!first.participant_upvoted);
+        assert_eq!(
+            participant_question_count(&pool, session.id, "alice")
+                .await
+                .unwrap(),
+            2
+        );
+
+        assert!(
+            toggle_question_upvote(&pool, session.id, first.id, "bob")
+                .await
+                .unwrap()
+        );
+        let duplicate_vote = sqlx::query(
+            "INSERT INTO question_votes (question_id, participant_hash, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(first.id)
+        .bind("bob")
+        .bind(now_millis())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert!(
+            duplicate_vote
+                .as_database_error()
+                .is_some_and(|error| error.is_unique_violation())
+        );
+        assert!(
+            toggle_question_upvote(&pool, session.id, first.id, "carol")
+                .await
+                .unwrap()
+        );
+        assert!(
+            toggle_question_upvote(&pool, session.id, second.id, "alice")
+                .await
+                .unwrap()
+        );
+
+        let questions = list_visible_questions(&pool, session.id, "bob")
+            .await
+            .unwrap();
+        assert_eq!(
+            questions
+                .iter()
+                .map(|question| question.id)
+                .collect::<Vec<_>>(),
+            vec![first.id, second.id, third.id]
+        );
+        assert_eq!(questions[0].vote_count, 2);
+        assert!(questions[0].participant_upvoted);
+        assert_eq!(questions[1].vote_count, 1);
+        assert!(!questions[1].participant_upvoted);
+
+        assert!(
+            set_question_answered(&pool, session.id, first.id, true)
+                .await
+                .unwrap()
+        );
+        let questions = list_visible_questions(&pool, session.id, "bob")
+            .await
+            .unwrap();
+        assert_eq!(questions.last().unwrap().id, first.id);
+        assert!(questions.last().unwrap().answered);
+        let answered_at: Option<i64> =
+            sqlx::query_scalar("SELECT answered_at FROM questions WHERE id = ?")
+                .bind(first.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(answered_at.is_some());
+
+        assert!(
+            set_question_answered(&pool, session.id, first.id, false)
+                .await
+                .unwrap()
+        );
+        let questions = list_visible_questions(&pool, session.id, "bob")
+            .await
+            .unwrap();
+        assert_eq!(questions[0].id, first.id);
+        assert!(!questions[0].answered);
+
+        let other_session = start_test_session(&pool, "other-questions").await;
+        let error = toggle_question_upvote(&pool, other_session.id, first.id, "bob")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does not belong to session"));
+        assert!(
+            !set_question_answered(&pool, other_session.id, first.id, true)
+                .await
+                .unwrap()
+        );
+
+        assert!(dismiss_question(&pool, session.id, first.id).await.unwrap());
+        let questions = list_visible_questions(&pool, session.id, "bob")
+            .await
+            .unwrap();
+        assert_eq!(
+            questions
+                .iter()
+                .map(|question| question.id)
+                .collect::<Vec<_>>(),
+            vec![second.id, third.id]
+        );
+        let hidden_state: (bool, Option<i64>) =
+            sqlx::query_as("SELECT hidden, hidden_at FROM questions WHERE id = ?")
+                .bind(first.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(hidden_state.0);
+        assert!(hidden_state.1.is_some());
+        assert_eq!(
+            participant_question_count(&pool, session.id, "alice")
+                .await
+                .unwrap(),
+            2
         );
     }
 }

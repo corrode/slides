@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     error::{AppError, AppResult},
-    markdown::{DeckDocument, parse_deck, resolve_code_references},
+    markdown::{parse_deck, resolve_code_references},
     models::{Deck, DeckSummary, EndedSessionSummary, Theme},
     store,
     web::{AppState, is_admin, require_admin, template},
@@ -35,8 +35,8 @@ struct DashboardTemplate {
 #[template(path = "editor.html")]
 struct EditorTemplate {
     deck: Deck,
-    published_versions: i64,
     active_code: Option<String>,
+    initial_notice: String,
     initial_preview: String,
 }
 
@@ -166,20 +166,27 @@ pub async fn editor(
         return Ok(Redirect::to("/admin/login").into_response());
     }
     let deck = required_deck(&state, &slug).await?;
-    let published_versions: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM deck_versions WHERE deck_id = ?")
-            .bind(deck.id)
-            .fetch_one(&state.pool)
-            .await?;
     let active_code = store::active_session_for_deck(&state.pool, deck.id)
         .await?
         .map(|session| session.code);
-    let document = parse_deck(&deck.draft_source)?;
-    let initial_preview = render::preview(&document, &Theme::from(&deck));
+    let (initial_preview, initial_notice) = match parse_deck(&deck.draft_source) {
+        Ok(document) => (
+            render::preview(&document, &Theme::from(&deck)),
+            "<span>Changes save automatically.</span>".into(),
+        ),
+        Err(error) => (
+            "<div class=\"empty-state\">Preview unavailable until the Markdown is valid.</div>"
+                .into(),
+            format!(
+                "<div class=\"notice error\">Draft saved, but preview unavailable: {}</div>",
+                html_escape::encode_text(&error.to_string())
+            ),
+        ),
+    };
     template(EditorTemplate {
         deck,
-        published_versions,
         active_code,
+        initial_notice,
         initial_preview,
     })
 }
@@ -192,12 +199,39 @@ pub async fn save(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    let document = save_form(&state, deck.id, &form).await?;
-    let preview = render::preview(&document, &theme_from_form(&form));
-    Ok(Html(format!(
-        "<div id=\"notice\" hx-swap-oob=\"innerHTML\"></div><section id=\"preview\" hx-swap-oob=\"innerHTML\">{preview}</section>"
-    ))
-    .into_response())
+    validate_draft_form(&form)?;
+    store::save_deck(
+        &state.pool,
+        deck.id,
+        form.title.trim(),
+        &form.source,
+        &form.font,
+        &form.background,
+        &form.text,
+        &form.accent,
+    )
+    .await?;
+    let active = store::active_session_for_deck(&state.pool, deck.id)
+        .await?
+        .is_some();
+    let saved = if active {
+        "Draft saved. Changes apply to the next session."
+    } else {
+        "Draft saved."
+    };
+    let response = match parse_deck(&form.source) {
+        Ok(document) => {
+            let preview = render::preview(&document, &theme_from_form(&form));
+            format!(
+                "<span>{saved}</span><div id=\"preview\" hx-swap-oob=\"innerHTML\">{preview}</div>"
+            )
+        }
+        Err(error) => format!(
+            "<span class=\"error-text\">{saved} Preview unavailable: {}</span>",
+            html_escape::encode_text(&error.to_string())
+        ),
+    };
+    Ok(Html(response).into_response())
 }
 
 pub async fn print_deck(
@@ -259,47 +293,54 @@ pub async fn start_session(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<DeckForm>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     if let Some(session) = store::active_session_for_deck(&state.pool, deck.id).await? {
         return Ok(Redirect::to(&format!("/present/{}", session.code)).into_response());
     }
-    let version = store::latest_version(&state.pool, deck.id)
-        .await?
-        .ok_or_else(|| AppError::bad_request("Publish the deck before presenting it."))?;
-    let document =
-        parse_deck(&version.source).map_err(|error| AppError::bad_request(error.to_string()))?;
-    if document.slides.is_empty() {
-        return Err(AppError::bad_request("The published deck has no slides."));
-    }
-    let session = store::start_session(&state.pool, deck.id, version.id).await?;
-    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
-}
-
-async fn save_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<DeckDocument> {
-    validate_deck_form(form)?;
-    let document =
-        parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
-    store::save_deck(
+    validate_deck_form(&form)?;
+    let published_source = resolve_code_references(&form.source)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let version_id = store::save_and_publish_deck(
         &state.pool,
-        deck_id,
+        deck.id,
         form.title.trim(),
         &form.source,
+        &published_source,
         &form.font,
         &form.background,
         &form.text,
         &form.accent,
     )
     .await?;
-    Ok(document)
+    let session = store::start_session(&state.pool, deck.id, version_id).await?;
+    let location = format!("/present/{}", session.code);
+    if headers.contains_key("hx-request") {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        response.headers_mut().insert(
+            "hx-redirect",
+            HeaderValue::from_str(&location).expect("presenter path is a valid header value"),
+        );
+        Ok(response)
+    } else {
+        Ok(Redirect::to(&location).into_response())
+    }
 }
 
 fn validate_deck_form(form: &DeckForm) -> AppResult<()> {
-    validate_title(form.title.trim())?;
+    validate_draft_form(form)?;
     if form.source.trim().is_empty() {
         return Err(AppError::bad_request("The deck cannot be empty."));
     }
+    Ok(())
+}
+
+fn validate_draft_form(form: &DeckForm) -> AppResult<()> {
+    validate_title(form.title.trim())?;
     if !matches!(form.font.as_str(), "system" | "serif" | "mono") {
         return Err(AppError::bad_request("Unsupported font choice."));
     }

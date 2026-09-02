@@ -16,6 +16,14 @@ pub enum LiveView {
     Audience,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LiveRequest<'a> {
+    pub view: LiveView,
+    pub participant_hash: Option<&'a str>,
+    pub requested_slide: Option<usize>,
+    pub viewers: u64,
+}
+
 #[derive(Debug, Default)]
 struct LiveData {
     selected: Vec<String>,
@@ -26,6 +34,8 @@ struct LiveData {
     answerers: i64,
     raised_hands: i64,
     hand_raised: bool,
+    viewers: u64,
+    questions: Vec<store::QuestionRow>,
 }
 
 pub fn printable(document: &DeckDocument) -> String {
@@ -73,7 +83,33 @@ pub async fn archived_slides(
             archived_reactions(&data.reactions),
         ));
     }
+    let questions = store::list_visible_questions(pool, session.id, "").await?;
+    slides.push_str(&archived_questions(&questions));
     Ok(slides)
+}
+
+fn archived_questions(questions: &[store::QuestionRow]) -> String {
+    if questions.is_empty() {
+        return String::new();
+    }
+    let items = questions
+        .iter()
+        .map(|question| {
+            let status = if question.answered {
+                " · Answered"
+            } else {
+                ""
+            };
+            format!(
+                "<li><p>{}</p><small>{} upvotes{status}</small></li>",
+                encode_text(&question.body),
+                question.vote_count,
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"archive-questions\"><h2>Audience questions</h2><ol>{items}</ol></section>"
+    )
 }
 
 pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
@@ -117,9 +153,7 @@ pub async fn live(
     session: &LiveSession,
     version: &DeckVersion,
     document: &DeckDocument,
-    view: LiveView,
-    participant_hash: Option<&str>,
-    requested_slide: Option<usize>,
+    request: LiveRequest<'_>,
 ) -> Result<String> {
     if session.ended_at.is_some() {
         return Ok("<main id=\"live-view\" class=\"audience-shell\"><section class=\"interaction\" style=\"text-align:center\"><p class=\"status-pill\">Session ended</p><h1>Thanks for taking part.</h1><p>The presenter has ended this presentation.</p></section></main>".into());
@@ -127,17 +161,19 @@ pub async fn live(
 
     let current = (session.current_slide as usize).min(document.slides.len().saturating_sub(1));
     let last = document.slides.len().saturating_sub(1);
-    let index = if view == LiveView::Audience {
-        requested_slide
+    let index = if request.view == LiveView::Audience {
+        request
+            .requested_slide
             .map(|requested| requested.min(if session.locked { current } else { last }))
             .unwrap_or(current)
     } else {
         current
     };
     let slide = &document.slides[index];
-    let data = live_data(pool, session, slide, index, participant_hash).await?;
+    let mut data = live_data(pool, session, slide, index, request.participant_hash).await?;
+    data.viewers = request.viewers;
 
-    Ok(match view {
+    Ok(match request.view {
         LiveView::Presenter => presenter_view(session, version, document, slide, index, &data),
         LiveView::Audience => audience_view(
             session,
@@ -197,6 +233,13 @@ async fn live_data(
         answerers: store::answerer_count(pool, session.id, index).await?,
         raised_hands: store::raised_hand_count(pool, session.id).await?,
         hand_raised,
+        viewers: 0,
+        questions: store::list_visible_questions(
+            pool,
+            session.id,
+            participant_hash.unwrap_or_default(),
+        )
+        .await?,
     })
 }
 
@@ -281,9 +324,12 @@ fn presenter_view(
         String::new()
     };
     let hand_signal = presenter_hand_signal(&session.code, data.raised_hands);
+    let live_status = live_status(data.viewers);
+    let notes = presenter_notes(slide.notes.as_deref());
+    let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a><span class=\"status-pill live\">Live</span><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\"><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div><nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\"><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -315,14 +361,84 @@ fn audience_view(
     let reactions = reaction_buttons(&session.code, index, &data.reactions, true);
     let navigation = audience_navigation(session, index, slide_count);
     let following_presenter = index == session.current_slide as usize;
+    let live_status = live_status(data.viewers);
+    let questions = audience_questions(&session.code, &data.questions);
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><span class=\"status-pill live\">Live</span></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section><div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div>{live_status}</nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
         slide_html = slide.html,
         hand_button = audience_hand_button(&session.code, data.hand_raised),
     )
+}
+
+fn live_status(viewers: u64) -> String {
+    let noun = if viewers == 1 { "viewer" } else { "viewers" };
+    format!("<span class=\"status-pill live\">Live · {viewers} {noun}</span>")
+}
+
+fn presenter_notes(notes: Option<&str>) -> String {
+    let Some(notes) = notes.filter(|notes| !notes.trim().is_empty()) else {
+        return String::new();
+    };
+    format!(
+        "<details class=\"presenter-notes\" data-presenter-notes><summary>Presenter notes</summary><div class=\"presenter-notes-content\">{notes}</div></details>"
+    )
+}
+
+fn audience_questions(code: &str, questions: &[store::QuestionRow]) -> String {
+    let items = question_items(code, questions, false);
+    format!(
+        "<section class=\"question-panel audience-questions\" aria-labelledby=\"audience-questions-title\"><div class=\"question-panel-heading\"><div><p class=\"eyebrow\">Q&amp;A</p><h2 id=\"audience-questions-title\">Questions</h2></div><span>{} asked</span></div><div class=\"question-error\" data-question-error></div><form class=\"question-form\" hx-post=\"/sessions/{code}/questions\" hx-swap=\"none\"><label for=\"question-body\">Ask the presenter</label><div><textarea id=\"question-body\" name=\"body\" rows=\"2\" maxlength=\"280\" required placeholder=\"What would you like to know?\"></textarea><button type=\"submit\">Ask</button></div><small>Up to 280 characters · five questions per person</small></form><ol class=\"question-list\">{items}</ol></section>",
+        questions.len(),
+    )
+}
+
+fn presenter_questions(code: &str, questions: &[store::QuestionRow]) -> String {
+    let unanswered = questions
+        .iter()
+        .filter(|question| !question.answered)
+        .count();
+    let items = question_items(code, questions, true);
+    format!(
+        "<details class=\"question-panel presenter-questions\" data-presenter-questions><summary>Audience questions · {unanswered} open</summary><ol class=\"question-list\">{items}</ol></details>"
+    )
+}
+
+fn question_items(code: &str, questions: &[store::QuestionRow], presenter: bool) -> String {
+    if questions.is_empty() {
+        return "<li class=\"question-empty\">No questions yet.</li>".into();
+    }
+    questions
+        .iter()
+        .map(|question| {
+            let answered_class = if question.answered { " answered" } else { "" };
+            let answered_label = if question.answered {
+                "<span class=\"question-answered\">Answered</span>"
+            } else {
+                ""
+            };
+            let actions = if presenter {
+                let action = if question.answered { "unanswered" } else { "answered" };
+                let label = if question.answered { "Reopen" } else { "Mark answered" };
+                format!(
+                    "<div class=\"question-moderation\"><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{action}\"><button class=\"secondary small\" type=\"submit\">{label}</button></form><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"ghost small\" type=\"submit\">Dismiss</button></form></div>",
+                    question.id, question.id,
+                )
+            } else {
+                let own = if question.participant_upvoted { " upvoted" } else { "" };
+                format!(
+                    "<form hx-post=\"/sessions/{code}/questions/{}/vote\" hx-swap=\"none\"><button class=\"question-vote{own}\" type=\"submit\" aria-pressed=\"{}\" aria-label=\"Upvote question; {} votes\"><span aria-hidden=\"true\">▲</span>{}</button></form>",
+                    question.id, question.participant_upvoted, question.vote_count, question.vote_count,
+                )
+            };
+            format!(
+                "<li class=\"question-item{answered_class}\"><div class=\"question-copy\"><p>{}</p>{answered_label}</div>{actions}</li>",
+                encode_text(&question.body),
+            )
+        })
+        .collect()
 }
 
 fn audience_navigation(session: &LiveSession, index: usize, slide_count: usize) -> String {
@@ -749,18 +865,18 @@ fn reaction_buttons(
     counts: &HashMap<String, i64>,
     interactive: bool,
 ) -> String {
-    const REACTIONS: &[(&str, &str, &str)] = &[
-        ("applause", "👏", "Clap"),
-        ("lightbulb", "💡", "Lightbulb"),
-        ("question", "?", "Question mark"),
+    const REACTIONS: &[(&str, &str, &str, &str)] = &[
+        ("applause", "👏", "Clap", "Alt+1"),
+        ("lightbulb", "💡", "Lightbulb", "Alt+2"),
+        ("question", "?", "Question mark", "Alt+3"),
     ];
     let buttons = REACTIONS
         .iter()
-        .map(|(kind, symbol, label)| {
+        .map(|(kind, symbol, label, shortcut)| {
             let count = counts.get(*kind).copied().unwrap_or(0);
             let key = format!("{slide_index}-{kind}");
             if interactive {
-                format!("<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"{}\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></button></form>", slide_index, label, code, kind, key, count, symbol, symbol, count)
+                format!("<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"{}\" aria-keyshortcuts=\"{}\" title=\"{} ({})\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\" data-audience-shortcut=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></button></form>", slide_index, label, shortcut, label, shortcut, code, kind, kind, key, count, symbol, symbol, count)
             } else {
                 format!("<span class=\"reaction static\" aria-label=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></span>", label, key, count, symbol, symbol, count)
             }
@@ -784,12 +900,14 @@ fn presenter_hand_signal(code: &str, count: i64) -> String {
 }
 
 fn audience_hand_button(code: &str, raised: bool) -> String {
+    let label = if raised { "Lower hand" } else { "Raise hand" };
     format!(
-        "<button class=\"secondary hand-button{}\" type=\"button\" aria-pressed=\"{}\" hx-post=\"/sessions/{}/hand\" hx-swap=\"none\"><span aria-hidden=\"true\">✋</span>{}</button>",
+        "<button class=\"secondary hand-button{}\" type=\"button\" aria-pressed=\"{}\" aria-keyshortcuts=\"Alt+H\" title=\"{} (Alt+H)\" hx-post=\"/sessions/{}/hand\" hx-swap=\"none\" data-audience-shortcut=\"hand\"><span aria-hidden=\"true\">✋</span>{}</button>",
         if raised { " raised" } else { "" },
         raised,
+        label,
         code,
-        if raised { "Lower hand" } else { "Raise hand" },
+        label,
     )
 }
 
@@ -896,8 +1014,9 @@ mod tests {
     };
 
     use super::{
-        LiveData, audience_interaction, audience_view, interaction_results, ordering_response,
-        ordering_results, presenter_view, preview, printable,
+        LiveData, archived_questions, archived_slides, audience_interaction, audience_view,
+        interaction_results, live_status, ordering_response, ordering_results, presenter_view,
+        preview, printable, question_items,
     };
 
     fn options() -> Vec<String> {
@@ -905,20 +1024,27 @@ mod tests {
     }
 
     #[test]
-    fn printable_contains_every_slide_without_navigation() {
-        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+    fn printable_contains_every_slide_without_navigation_or_notes() {
+        let document = parse_deck(
+            "# First\n\n:::notes\nDo not print this private note.\n:::\n\n---\n\n# Second",
+        )
+        .unwrap();
 
         let html = printable(&document);
 
         assert_eq!(html.matches("class=\"print-slide\"").count(), 2);
         assert!(!html.contains("data-preview-nav"));
+        assert!(!html.contains("private note"));
         assert!(html.contains("<h1>First</h1>"));
         assert!(html.contains("<h1>Second</h1>"));
     }
 
     #[test]
-    fn preview_contains_every_slide_and_navigation() {
-        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+    fn preview_contains_every_slide_and_navigation_but_not_notes() {
+        let document = parse_deck(
+            "# First\n\n:::notes\nDo not preview this private note.\n:::\n\n---\n\n# Second",
+        )
+        .unwrap();
         let theme = Theme {
             font: "system".into(),
             background: DEFAULT_THEME_BACKGROUND.into(),
@@ -932,6 +1058,31 @@ mod tests {
         assert!(html.contains("data-preview-nav=\"previous\""));
         assert!(html.contains("data-preview-nav=\"next\""));
         assert!(html.contains("Slide 1 of 2"));
+        assert!(!html.contains("private note"));
+    }
+
+    #[tokio::test]
+    async fn archive_excludes_presenter_notes() {
+        let pool = crate::store::connect("sqlite::memory:").await.unwrap();
+        let document =
+            parse_deck("# Public slide\n\n:::notes\nDo not archive this private note.\n:::")
+                .unwrap();
+        let session = LiveSession {
+            id: 1,
+            deck_version_id: 1,
+            code: "553675".into(),
+            current_slide: 0,
+            locked: true,
+            interaction_open: false,
+            results_revealed: false,
+            follow_revision: 0,
+            ended_at: Some(1),
+        };
+
+        let html = archived_slides(&pool, &session, &document).await.unwrap();
+
+        assert!(html.contains("Public slide"));
+        assert!(!html.contains("private note"));
     }
 
     #[test]
@@ -1015,9 +1166,10 @@ mod tests {
 
     #[test]
     fn live_toolbars_keep_essential_context_and_actions() {
-        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+        let document =
+            parse_deck("# First\n\n:::notes\nMention **ownership** here.\n:::\n\n---\n\n# Second")
+                .unwrap();
         let version = DeckVersion {
-            id: 1,
             title: "A useful deck".into(),
             source: String::new(),
             theme_font: "system".into(),
@@ -1036,13 +1188,19 @@ mod tests {
             follow_revision: 0,
             ended_at: None,
         };
-        let data = LiveData::default();
+        let data = LiveData {
+            viewers: 3,
+            ..LiveData::default()
+        };
 
         let presenter =
             presenter_view(&session, &version, &document, &document.slides[0], 0, &data);
         assert!(presenter.contains("class=\"presenter-toolbar\""));
         assert!(presenter.contains("Join code</span><strong>553675"));
         assert!(presenter.contains("Copy link"));
+        assert!(presenter.contains("Live · 3 viewers"));
+        assert!(presenter.contains("data-presenter-notes"));
+        assert!(presenter.contains("Mention <strong>ownership</strong> here."));
         assert!(!presenter.contains("Future slides locked"));
 
         let audience = audience_view(
@@ -1057,7 +1215,42 @@ mod tests {
         assert!(audience.contains("class=\"nav-title\">A useful deck"));
         assert!(audience.contains("class=\"nav-position\">1/2"));
         assert!(!audience.contains("Join code"));
-        assert!(audience.contains("</div><span class=\"status-pill live\">Live</span></nav>"));
+        assert!(
+            audience
+                .contains("</div><span class=\"status-pill live\">Live · 3 viewers</span></nav>")
+        );
+        assert!(audience.contains("aria-keyshortcuts=\"Alt+H\""));
+        assert!(audience.contains("aria-keyshortcuts=\"Alt+1\""));
+        assert!(!audience.contains("presenter-notes"));
+        assert!(!audience.contains("Mention"));
+        assert_eq!(
+            live_status(1),
+            "<span class=\"status-pill live\">Live · 1 viewer</span>"
+        );
+    }
+
+    #[test]
+    fn questions_are_escaped_and_have_view_specific_controls() {
+        let questions = vec![crate::store::QuestionRow {
+            id: 7,
+            body: "Does <script>alert(1)</script> compile?".into(),
+            answered: false,
+            vote_count: 3,
+            participant_upvoted: true,
+        }];
+
+        let audience = question_items("553675", &questions, false);
+        let presenter = question_items("553675", &questions, true);
+        let archive = archived_questions(&questions);
+
+        assert!(!audience.contains("<script>"));
+        assert!(audience.contains("&lt;script&gt;"));
+        assert!(audience.contains("aria-pressed=\"true\""));
+        assert!(audience.contains("3 votes"));
+        assert!(presenter.contains("Mark answered"));
+        assert!(presenter.contains("Dismiss"));
+        assert!(!archive.contains("<script>"));
+        assert!(archive.contains("3 upvotes"));
     }
 
     #[test]

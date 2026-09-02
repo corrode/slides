@@ -21,8 +21,9 @@ The format intentionally does not derive navigation from heading levels, execute
 
 A deck is UTF-8 Markdown containing one or more slides. Each slide contains:
 
-1. Markdown content; and
-2. at most one interaction block.
+1. Markdown content;
+2. at most one interaction block; and
+3. at most one presenter notes block.
 
 Reactions are a session feature and require no authoring syntax.
 
@@ -57,7 +58,7 @@ The content parser supports CommonMark plus:
 - task lists;
 - fenced and indented code blocks.
 
-The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text.
+The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text. On interactive pages, fenced `rust` and `rs` blocks get a **Run** control. The server forwards that block's source to the stable Rust 2024 toolchain at `play.rust-lang.org`; code runs in the official Playground sandbox, never in the Slides process. Print/PDF output and offline session archives contain only the highlighted source.
 
 ### Referenced code files
 
@@ -81,6 +82,21 @@ Raw HTML is escaped and displayed as text. It is never executed. Link and image 
 - `mailto` URLs.
 
 Other schemes are replaced with `#`.
+
+### Presenter notes
+
+Presenter-only notes use a fenced `:::notes` block. The body supports the same sanitized Markdown as slide content:
+
+```markdown
+:::notes
+Explain why the borrow ends before the next statement.
+
+- Pause for questions.
+- Keep this example under two minutes.
+:::
+```
+
+A slide may contain at most one notes block. The opening line accepts no attributes or flags. Notes markers inside code fences remain code. Presenter notes appear in a collapsible panel in the live presenter view and are excluded from the audience view, editor preview, print/PDF output, and final session archive.
 
 ## Interaction blocks
 
@@ -233,12 +249,11 @@ Changes that alter the meaning of valid v1 source require a new format version. 
 The following syntax is reserved for design work and is **not implemented in v1**:
 
 - global deck metadata with an explicit format version;
-- `:::notes` for presenter notes;
 - `:::steps` for incremental reveals;
 - `:::columns` and `:::column` for constrained layouts;
 - per-slide attributes for IDs, layouts, backgrounds, and classes;
 - code-fence attributes for line numbers and progressive highlighting;
-- explicit export policy for fragments, notes, and hidden slides.
+- explicit export policy for fragments and hidden slides.
 
 Dedicated fenced blocks are preferred over HTML comments, altered list markers, framework directives, or image-alt mini-languages. Unknown presentation directives should become validation errors once a versioned directive namespace exists.
 
@@ -264,11 +279,11 @@ export:
 :::
 
 :::notes
-Explain why export policy belongs in the document model.
+Explain why deterministic export policy belongs in the document model.
 :::
 ````
 
-This example is illustrative and must not be used in a v1 deck.
+The metadata, slide attributes, and `:::steps` syntax in this example are illustrative and must not be used in a v1 deck. The `:::notes` block is valid v1 syntax.
 
 ## Research notes
 

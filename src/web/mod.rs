@@ -1,4 +1,5 @@
 mod admin;
+mod playground;
 pub(crate) mod render;
 mod session;
 mod shared;
@@ -8,7 +9,7 @@ use std::sync::Arc;
 use askama::Template;
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -37,6 +38,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(session::landing))
         .route("/healthz", get(healthz))
+        .route(
+            "/api/playground/run",
+            post(playground::run).layer(DefaultBodyLimit::max(70 * 1024)),
+        )
         .route("/join", post(session::join_code))
         .route("/join/{code}", get(session::audience))
         .route("/admin/login", get(admin::login_page).post(admin::login))
@@ -60,6 +65,15 @@ pub fn router(state: AppState) -> Router {
             post(session::interaction_state),
         )
         .route("/sessions/{code}/answer", post(session::answer))
+        .route("/sessions/{code}/questions", post(session::ask_question))
+        .route(
+            "/sessions/{code}/questions/{question_id}/vote",
+            post(session::toggle_question_upvote),
+        )
+        .route(
+            "/sessions/{code}/questions/{question_id}/moderate",
+            post(session::moderate_question),
+        )
         .route("/sessions/{code}/react/{kind}", post(session::react))
         .route("/sessions/{code}/end", post(session::end))
         .route(

@@ -4,6 +4,9 @@
   let slideBeforeSwap = null;
   let previewSlideBeforeSwap = 0;
   let pointerCard = null;
+  let editorSplitPointer = null;
+  let presenterNotesOpen = true;
+  let presenterQuestionsOpen = false;
 
   function rememberBars() {
     previousBarValues.clear();
@@ -129,6 +132,147 @@
     showPreviewSlide(deck, previewIndexFromUrl() ?? previewSlideBeforeSwap);
   }
 
+  function initializeMarkdownEditor() {
+    const textarea = document.querySelector("[data-markdown-editor]");
+    if (!textarea || typeof window.CodeMirror !== "function") return;
+
+    const editor = window.CodeMirror.fromTextArea(textarea, {
+      mode: "markdown",
+      inputStyle: "contenteditable",
+      lineNumbers: true,
+      lineWrapping: true,
+      fixedGutter: false,
+      viewportMargin: 20,
+    });
+    editor.setSize("100%", "100%");
+    const input = editor.getInputField();
+    input.setAttribute("aria-label", "Presentation Markdown");
+    input.setAttribute("aria-multiline", "true");
+    editor.on("change", () => {
+      editor.save();
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    window.requestAnimationFrame(() => editor.refresh());
+  }
+
+  const EDITOR_SPLIT_MIN = 25;
+  const EDITOR_SPLIT_MAX = 70;
+  const EDITOR_SPLIT_STORAGE = "slides-editor-pane-width";
+  const PRESENTER_NOTES_STORAGE = "slides-presenter-notes-open";
+  const PRESENTER_QUESTIONS_STORAGE = "slides-presenter-questions-open";
+
+  function setEditorSplit(layout, requested) {
+    const position = Math.max(EDITOR_SPLIT_MIN, Math.min(EDITOR_SPLIT_MAX, requested));
+    layout.style.setProperty("--editor-pane-width", `${position}%`);
+    layout.querySelector("[data-editor-divider]")?.setAttribute("aria-valuenow", `${Math.round(position)}`);
+    return position;
+  }
+
+  function restoreEditorSplit() {
+    const layout = document.querySelector("[data-editor-split]");
+    if (!layout) return;
+    try {
+      const saved = Number.parseFloat(window.localStorage.getItem(EDITOR_SPLIT_STORAGE) || "42");
+      if (!Number.isNaN(saved)) setEditorSplit(layout, saved);
+    } catch {
+      setEditorSplit(layout, 42);
+    }
+  }
+
+  function persistEditorSplit(divider) {
+    const position = divider.getAttribute("aria-valuenow");
+    if (!position) return;
+    try {
+      window.localStorage.setItem(EDITOR_SPLIT_STORAGE, position);
+    } catch {
+      // The splitter remains usable when storage is unavailable.
+    }
+  }
+
+  function initializePresenterNotes() {
+    try {
+      const saved = window.localStorage.getItem(PRESENTER_NOTES_STORAGE);
+      if (saved !== null) presenterNotesOpen = saved === "open";
+    } catch {
+      presenterNotesOpen = true;
+    }
+    restorePresenterNotes();
+  }
+
+  function restorePresenterNotes() {
+    const notes = document.querySelector("[data-presenter-notes]");
+    if (notes instanceof HTMLDetailsElement) notes.open = presenterNotesOpen;
+  }
+
+  function rememberPresenterNotes(details) {
+    presenterNotesOpen = details.open;
+    try {
+      window.localStorage.setItem(PRESENTER_NOTES_STORAGE, details.open ? "open" : "closed");
+    } catch {
+      // The notes panel remains usable when storage is unavailable.
+    }
+  }
+
+  function initializePresenterQuestions() {
+    try {
+      presenterQuestionsOpen =
+        window.localStorage.getItem(PRESENTER_QUESTIONS_STORAGE) === "open";
+    } catch {
+      presenterQuestionsOpen = false;
+    }
+    restorePresenterQuestions();
+  }
+
+  function restorePresenterQuestions() {
+    const questions = document.querySelector("[data-presenter-questions]");
+    if (questions instanceof HTMLDetailsElement) questions.open = presenterQuestionsOpen;
+  }
+
+  function rememberPresenterQuestions(details) {
+    presenterQuestionsOpen = details.open;
+    try {
+      window.localStorage.setItem(
+        PRESENTER_QUESTIONS_STORAGE,
+        details.open ? "open" : "closed",
+      );
+    } catch {
+      // The questions panel remains usable when storage is unavailable.
+    }
+  }
+
+  function resizeEditorFromPointer(event) {
+    if (!editorSplitPointer) return;
+    const bounds = editorSplitPointer.layout.getBoundingClientRect();
+    if (bounds.width === 0) return;
+    setEditorSplit(editorSplitPointer.layout, ((event.clientX - bounds.left) / bounds.width) * 100);
+    event.preventDefault();
+  }
+
+  function finishEditorResize() {
+    if (!editorSplitPointer) return;
+    persistEditorSplit(editorSplitPointer.divider);
+    editorSplitPointer = null;
+  }
+
+  function keyboardEditorDivider(event) {
+    const divider = event.target.closest?.("[data-editor-divider]");
+    const layout = divider?.closest("[data-editor-split]");
+    if (!divider || !layout) return false;
+
+    const current = Number.parseFloat(divider.getAttribute("aria-valuenow") || "42");
+    let next = null;
+    if (event.key === "ArrowLeft") next = current - (event.shiftKey ? 10 : 2);
+    if (event.key === "ArrowRight") next = current + (event.shiftKey ? 10 : 2);
+    if (event.key === "Home") next = EDITOR_SPLIT_MIN;
+    if (event.key === "End") next = EDITOR_SPLIT_MAX;
+    if (next === null) return false;
+
+    event.preventDefault();
+    setEditorSplit(layout, next);
+    persistEditorSplit(divider);
+    return true;
+  }
+
   function blocksSlideShortcuts(target) {
     return (
       target instanceof HTMLElement &&
@@ -136,6 +280,38 @@
         target.isContentEditable ||
         Boolean(target.closest("[data-ordering-list]")))
     );
+  }
+
+  function keyboardAudienceAction(event) {
+    const audience = document.querySelector(".audience-shell");
+    if (
+      !audience ||
+      event.defaultPrevented ||
+      event.repeat ||
+      !event.altKey ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      blocksSlideShortcuts(event.target)
+    ) {
+      return false;
+    }
+
+    const action = {
+      KeyH: "hand",
+      Digit1: "applause",
+      Digit2: "lightbulb",
+      Digit3: "question",
+    }[event.code];
+    if (!action) return false;
+
+    const control = audience.querySelector(
+      `[data-audience-shortcut="${action}"]:not([disabled]):not([aria-disabled="true"])`,
+    );
+    if (!control) return false;
+    event.preventDefault();
+    control.click();
+    return true;
   }
 
   function keyboardNavigation(event) {
@@ -226,6 +402,92 @@
     }
   }
 
+  function initializeRustPlaygrounds(root = document) {
+    if (document.body.matches("[data-print-deck]")) return;
+    root.querySelectorAll("[data-rust-code]:not([data-playground-ready])").forEach((block) => {
+      block.dataset.playgroundReady = "true";
+
+      const toolbar = document.createElement("div");
+      toolbar.className = "playground-toolbar";
+      const label = document.createElement("span");
+      label.textContent = "Rust Playground";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary small";
+      button.dataset.playgroundRun = "";
+      button.title = "Run this code on play.rust-lang.org";
+      button.innerHTML = '<span aria-hidden="true">▶</span> Run';
+      toolbar.append(label, button);
+
+      const result = document.createElement("div");
+      result.className = "playground-result";
+      result.dataset.playgroundResult = "";
+      result.hidden = true;
+      const status = document.createElement("p");
+      status.className = "playground-status";
+      status.dataset.playgroundStatus = "";
+      status.setAttribute("role", "status");
+      const output = document.createElement("pre");
+      output.className = "playground-output";
+      output.dataset.playgroundOutput = "";
+      output.tabIndex = 0;
+      result.append(status, output);
+
+      block.prepend(toolbar);
+      block.append(result);
+    });
+  }
+
+  async function runRustCode(button) {
+    const block = button.closest("[data-rust-code]");
+    const source = block?.querySelector(":scope > pre:not([data-playground-output])")?.textContent;
+    const result = block?.querySelector("[data-playground-result]");
+    const status = block?.querySelector("[data-playground-status]");
+    const output = block?.querySelector("[data-playground-output]");
+    if (!block || source == null || !result || !status || !output || button.disabled) return;
+
+    const now = Date.now();
+    const lastRunAt = Number.parseInt(button.dataset.lastRunAt || "0", 10);
+    if (now - lastRunAt < 750) return;
+    button.dataset.lastRunAt = `${now}`;
+    button.disabled = true;
+    result.hidden = false;
+    result.classList.remove("success", "error");
+    status.textContent = "Running on play.rust-lang.org…";
+    output.textContent = "";
+
+    try {
+      const response = await fetch("/api/playground/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: source }),
+      });
+      if (!response.ok) {
+        if (response.status === 429) {
+          status.textContent = "The Playground is rate-limiting requests. Try again shortly.";
+        } else if (response.status === 413) {
+          status.textContent = "This code block is too large to run.";
+        } else {
+          status.textContent = "The Playground is unavailable. Try again shortly.";
+        }
+        result.classList.add("error");
+        return;
+      }
+
+      const data = await response.json();
+      const streams = [data.stdout, data.stderr].filter((value) => value);
+      output.textContent = streams.join("\n") || "(no output)";
+      status.textContent = data.success ? "Finished." : "Compilation failed.";
+      result.classList.add(data.success ? "success" : "error");
+    } catch (error) {
+      console.error(error);
+      status.textContent = "The Playground request failed. Check your connection and try again.";
+      result.classList.add("error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function refreshOrderingButtons(list) {
     const cards = [...list.querySelectorAll(".ordering-card")];
     cards.forEach((card, index) => {
@@ -273,11 +535,16 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    initializeMarkdownEditor();
     animateBars();
     followPresenter();
     rememberSlide();
     updateReactionFeed(false);
     restorePreviewSlide();
+    restoreEditorSplit();
+    initializePresenterNotes();
+    initializePresenterQuestions();
+    initializeRustPlaygrounds();
   });
 
   window.addEventListener("load", () => {
@@ -286,7 +553,10 @@
     }
   });
 
-  document.addEventListener("keydown", keyboardNavigation);
+  document.addEventListener("keydown", (event) => {
+    if (keyboardEditorDivider(event)) return;
+    if (!keyboardAudienceAction(event)) keyboardNavigation(event);
+  });
 
   window.addEventListener("hashchange", () => {
     const deck = document.querySelector("[data-preview-deck]");
@@ -294,12 +564,37 @@
     if (deck && index !== null) showPreviewSlide(deck, index, false);
   });
 
+  document.addEventListener("input", (event) => {
+    if (!event.target.matches?.("#deck-title")) return;
+    document.title = `Edit ${event.target.value || "Untitled"} · Slides`;
+  });
+
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      if (event.target.matches?.("[data-presenter-notes]")) rememberPresenterNotes(event.target);
+      if (event.target.matches?.("[data-presenter-questions]")) {
+        rememberPresenterQuestions(event.target);
+      }
+    },
+    true,
+  );
+
   document.addEventListener("submit", (event) => {
     const message = event.target.dataset.confirm;
     if (message && !window.confirm(message)) event.preventDefault();
   });
 
   document.addEventListener("click", (event) => {
+    const dialogTrigger = event.target.closest("[data-dialog-open]");
+    if (dialogTrigger) {
+      const dialog = document.getElementById(dialogTrigger.dataset.dialogOpen);
+      if (dialog instanceof HTMLDialogElement) {
+        dialog.showModal();
+        window.requestAnimationFrame(() => dialog.querySelector("[tabindex='-1']")?.focus());
+      }
+      return;
+    }
     const printNow = event.target.closest("[data-print-now]");
     if (printNow) {
       window.print();
@@ -322,6 +617,11 @@
     const share = event.target.closest("[data-share-url]");
     if (share) {
       copyPresentationLink(share);
+      return;
+    }
+    const playgroundRun = event.target.closest("[data-playground-run]");
+    if (playgroundRun) {
+      runRustCode(playgroundRun);
       return;
     }
     const move = event.target.closest("[data-order-move]");
@@ -359,6 +659,14 @@
   });
 
   document.addEventListener("pointerdown", (event) => {
+    const divider = event.target.closest("[data-editor-divider]");
+    const layout = divider?.closest("[data-editor-split]");
+    if (divider && layout && event.button === 0) {
+      editorSplitPointer = { divider, layout };
+      divider.setPointerCapture(event.pointerId);
+      resizeEditorFromPointer(event);
+      return;
+    }
     if (event.pointerType === "mouse") return;
     const handle = event.target.closest(".drag-handle");
     pointerCard = handle?.closest(".ordering-card") || null;
@@ -369,6 +677,10 @@
   });
 
   document.addEventListener("pointermove", (event) => {
+    if (editorSplitPointer) {
+      resizeEditorFromPointer(event);
+      return;
+    }
     if (!pointerCard) return;
     const list = pointerCard.closest("[data-ordering-list]");
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(
@@ -389,9 +701,29 @@
     if (list) saveOrdering(list);
   }
 
+  document.addEventListener("pointerup", finishEditorResize);
+  document.addEventListener("pointercancel", finishEditorResize);
+  document.addEventListener("lostpointercapture", finishEditorResize);
   document.addEventListener("pointerup", finishPointerOrdering);
   document.addEventListener("pointercancel", finishPointerOrdering);
   document.addEventListener("lostpointercapture", finishPointerOrdering);
+
+  document.addEventListener("htmx:responseError", (event) => {
+    const request = event.detail.elt;
+    if (!(request instanceof HTMLElement)) return;
+    const questionPanel = request.closest(".question-panel");
+    if (questionPanel) {
+      const notice = questionPanel.querySelector("[data-question-error]");
+      if (notice) notice.innerHTML = event.detail.xhr.responseText;
+      return;
+    }
+    if (!request.matches("#deck-form, [data-deck-action]")) return;
+    const notice = document.querySelector("#notice");
+    if (!notice) return;
+    notice.innerHTML =
+      event.detail.xhr.responseText ||
+      '<div class="notice error" role="alert">The draft could not be saved.</div>';
+  });
 
   document.addEventListener("htmx:before:swap", () => {
     rememberBars();
@@ -405,5 +737,8 @@
     indicateSlideChange();
     updateReactionFeed(true);
     restorePreviewSlide();
+    restorePresenterNotes();
+    restorePresenterQuestions();
+    initializeRustPlaygrounds();
   });
 })();

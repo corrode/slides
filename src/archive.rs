@@ -48,6 +48,23 @@ struct StoredRaisedHand {
     raised_at: i64,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct StoredQuestion {
+    id: i64,
+    participant_hash: String,
+    body: String,
+    created_at: i64,
+    answered: bool,
+    answered_at: Option<i64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StoredQuestionUpvote {
+    question_id: i64,
+    participant_hash: String,
+    created_at: i64,
+}
+
 #[derive(Debug, Serialize)]
 struct AudienceInput {
     format_version: u8,
@@ -58,6 +75,8 @@ struct AudienceInput {
     limitations: Vec<String>,
     responses: Vec<ExportResponse>,
     reactions: Vec<ExportReaction>,
+    questions: Vec<ExportQuestion>,
+    question_upvotes: Vec<ExportQuestionUpvote>,
     raised_hands_at_end: Vec<ExportRaisedHand>,
 }
 
@@ -84,6 +103,23 @@ struct ExportReaction {
 struct ExportRaisedHand {
     participant: String,
     raised_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportQuestion {
+    id: i64,
+    participant: String,
+    body: String,
+    created_at: i64,
+    answered: bool,
+    answered_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportQuestionUpvote {
+    question_id: i64,
+    participant: String,
+    created_at: i64,
 }
 
 pub async fn build(
@@ -116,8 +152,30 @@ pub async fn build(
     .bind(session.id)
     .fetch_all(pool)
     .await?;
+    let questions = sqlx::query_as::<_, StoredQuestion>(
+        r#"SELECT id, participant_hash, body, created_at, answered, answered_at
+           FROM questions WHERE session_id = ? AND hidden = 0 ORDER BY created_at, id"#,
+    )
+    .bind(session.id)
+    .fetch_all(pool)
+    .await?;
+    let question_upvotes = sqlx::query_as::<_, StoredQuestionUpvote>(
+        r#"SELECT v.question_id, v.participant_hash, v.created_at
+           FROM question_votes v JOIN questions q ON q.id = v.question_id
+           WHERE q.session_id = ? AND q.hidden = 0
+           ORDER BY v.question_id, v.created_at, v.participant_hash"#,
+    )
+    .bind(session.id)
+    .fetch_all(pool)
+    .await?;
 
-    let participant_ids = participant_ids(&responses, &reactions, &raised_hands);
+    let participant_ids = participant_ids(
+        &responses,
+        &reactions,
+        &raised_hands,
+        &questions,
+        &question_upvotes,
+    );
     let data = AudienceInput {
         format_version: 1,
         presentation: version.title.clone(),
@@ -128,6 +186,8 @@ pub async fn build(
             "Responses contain the final stored answer from each participant, not overwritten answers."
                 .into(),
             "Raised hands contain only the hands still raised when the session ended, not hand history."
+                .into(),
+            "Presenter-dismissed questions and their upvotes are excluded from the shared archive."
                 .into(),
         ],
         responses: responses
@@ -156,6 +216,25 @@ pub async fn build(
                 slide: row.slide_index + 1,
                 participant: participant_ids[&row.participant_hash].clone(),
                 kind: row.kind,
+                created_at: row.created_at,
+            })
+            .collect(),
+        questions: questions
+            .into_iter()
+            .map(|row| ExportQuestion {
+                id: row.id,
+                participant: participant_ids[&row.participant_hash].clone(),
+                body: row.body,
+                created_at: row.created_at,
+                answered: row.answered,
+                answered_at: row.answered_at,
+            })
+            .collect(),
+        question_upvotes: question_upvotes
+            .into_iter()
+            .map(|row| ExportQuestionUpvote {
+                question_id: row.question_id,
+                participant: participant_ids[&row.participant_hash].clone(),
                 created_at: row.created_at,
             })
             .collect(),
@@ -225,12 +304,16 @@ fn participant_ids(
     responses: &[StoredResponse],
     reactions: &[StoredReaction],
     raised_hands: &[StoredRaisedHand],
+    questions: &[StoredQuestion],
+    question_upvotes: &[StoredQuestionUpvote],
 ) -> BTreeMap<String, String> {
     let hashes = responses
         .iter()
         .map(|row| &row.participant_hash)
         .chain(reactions.iter().map(|row| &row.participant_hash))
         .chain(raised_hands.iter().map(|row| &row.participant_hash))
+        .chain(questions.iter().map(|row| &row.participant_hash))
+        .chain(question_upvotes.iter().map(|row| &row.participant_hash))
         .collect::<BTreeSet<_>>();
     hashes
         .into_iter()

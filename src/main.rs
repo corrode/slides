@@ -1,7 +1,7 @@
 mod archive;
+mod cli;
 mod error;
 mod live;
-mod markdown;
 mod models;
 mod store;
 mod web;
@@ -11,10 +11,23 @@ use std::{env, sync::Arc};
 use anyhow::Result;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+pub use slides::markdown;
+
 use crate::{live::LiveHub, web::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    match cli::command(env::args_os().skip(1))? {
+        cli::Command::Serve => serve().await,
+        cli::Command::Validate(path) => cli::validate(&path),
+        cli::Command::Help => {
+            println!("{}", cli::help());
+            Ok(())
+        }
+    }
+}
+
+async fn serve() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             EnvFilter::try_from_default_env()
