@@ -35,6 +35,10 @@ I help engineering teams adopt and improve Rust.
 
 ---
 
+![Survey overview](/assets/survey-overview.png)
+
+---
+
 # What I heard from your survey
 
 - Python is the dominant language
@@ -46,6 +50,18 @@ That's a good place to start!
 
 ---
 
+![Survey results for current Rust experience](/assets/survey-rust-experience.png)
+
+---
+
+![Survey results for main programming languages](/assets/survey-programming-languages.png)
+
+---
+
+![Survey results for IDE usage](/assets/survey-ides.png)
+
+---
+
 # What you want to learn
 
 - Project structure, modules, and visibility
@@ -54,6 +70,10 @@ That's a good place to start!
 - Rust for web services
 
 The clearest concern: **the learning curve**.
+
+---
+
+![Survey results for Rust ecosystem interests](/assets/survey-ecosystem-interests.png)
 
 ---
 
@@ -406,3 +426,21 @@ If you like:
 # Questions?
 
 What felt useful, surprising, unclear?
+
+---
+
+# Where to go from here?
+
+1. Add a function that counts lines in a file.
+2. Add a function that counts characters in a file.
+3. Change all filename parameters from `&str` to `&Path`.
+4. Add a function that counts files in a directory.
+5. Add a function that counts characters in all files in a directory.
+
+**Bonus:**
+
+6. Only count `.txt` files.
+7. Print the filename with the most characters.
+8. Create a `FileStats` struct containing words, lines, and characters.
+
+[Open the self-directed exercise in the Rust Playground](https://play.rust-lang.org/?version=stable&mode=debug&edition=2024&gist=afa67b8068a6efcaa587734ad83aedfe)

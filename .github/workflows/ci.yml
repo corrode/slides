@@ -356,24 +356,22 @@ jobs:
               --show-error \
               --silent \
               --output /dev/null
-
-            curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/publish" \
-              --request POST \
-              --cookie "${cookie_jar}" \
-              --data-urlencode "title=Intro to Rust" \
-              --data-urlencode "source@examples/intro-to-rust.md" \
-              --data-urlencode "font=system" \
-              --data-urlencode "background=#1e1e2e" \
-              --data-urlencode "text=#cdd6f4" \
-              --data-urlencode "accent=#f9e2af" \
-              --fail \
-              --show-error \
-              --silent \
-              --output /dev/null
-            echo "Published the Intro to Rust deck."
-          elif [ "${editor_status}" = "200" ]; then
-            echo "The Intro to Rust deck is already present."
-          else
+          elif [ "${editor_status}" != "200" ]; then
             echo "Unexpected editor response: HTTP ${editor_status}." >&2
             exit 1
           fi
+
+          curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/publish" \
+            --request POST \
+            --cookie "${cookie_jar}" \
+            --data-urlencode "title=Intro to Rust" \
+            --data-urlencode "source@examples/intro-to-rust.md" \
+            --data-urlencode "font=system" \
+            --data-urlencode "background=#1e1e2e" \
+            --data-urlencode "text=#cdd6f4" \
+            --data-urlencode "accent=#f9e2af" \
+            --fail \
+            --show-error \
+            --silent \
+            --output /dev/null
+          echo "Published the Intro to Rust deck."
