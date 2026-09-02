@@ -230,11 +230,25 @@ jobs:
             echo "Created Coolify application ${app_uuid}."
           fi
 
+          environment_variables="$(api_get "/applications/${app_uuid}/envs")"
+          upsert_env() {
+            local key="${1}"
+            local payload="${2}"
+            local method="POST"
+            if jq --exit-status --arg key "${key}" \
+              'any(.[]; .key == $key and (.is_preview // false) == false)' \
+              <<<"${environment_variables}" >/dev/null; then
+              method="PATCH"
+            fi
+            api_send "${method}" "/applications/${app_uuid}/envs" "${payload}" >/dev/null
+            echo "Configured ${key}."
+          }
+
           admin_env="$(jq --null-input --arg value "${ADMIN_TOKEN}" \
             '{key: "SLIDES_ADMIN_PASSWORD", value: $value, is_preview: false, is_literal: true}')"
-          api_send PATCH "/applications/${app_uuid}/envs" "${admin_env}" >/dev/null
-          api_send PATCH "/applications/${app_uuid}/envs" \
-            '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}' >/dev/null
+          upsert_env SLIDES_ADMIN_PASSWORD "${admin_env}"
+          upsert_env SLIDES_SECURE_COOKIES \
+            '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}'
 
           echo "resource_uuid=${app_uuid}" >>"${GITHUB_OUTPUT}"
           echo "Coolify application UUID: ${app_uuid}"
@@ -247,6 +261,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          COOLIFY_TOKEN="${COOLIFY_TOKEN//[[:space:]]/}"
+          COOLIFY_TOKEN="${COOLIFY_TOKEN#Bearer}"
 
           response="$(curl --request POST \
             "${COOLIFY_BASE_URL}/api/v1/deploy?uuid=${COOLIFY_RESOURCE_UUID}&force=false" \
