@@ -223,6 +223,7 @@ jobs:
             build_pack: "dockerfile",
             dockerfile_location: "/Dockerfile",
             ports_exposes: "3000",
+            custom_docker_run_options: "--mount type=volume,source=slides-data,target=/app/data",
             health_check_enabled: true,
             health_check_path: "/healthz",
             health_check_port: "3000",
@@ -238,13 +239,6 @@ jobs:
           api_send PATCH "/applications/${app_uuid}/envs" "${admin_env}" >/dev/null
           api_send PATCH "/applications/${app_uuid}/envs" \
             '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}' >/dev/null
-
-          storages="$(api_get "/applications/${app_uuid}/storages")"
-          if ! jq --exit-status \
-            '(.storages // .) | any(.mount_path == "/app/data")' <<<"${storages}" >/dev/null; then
-            api_send POST "/applications/${app_uuid}/storages" \
-              '{"type":"persistent","name":"slides-data","mount_path":"/app/data"}' >/dev/null
-          fi
 
           echo "resource_uuid=${app_uuid}" >>"${GITHUB_OUTPUT}"
           echo "Coolify application UUID: ${app_uuid}"
