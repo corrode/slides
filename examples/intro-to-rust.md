@@ -35,10 +35,6 @@ I help engineering teams adopt and improve Rust.
 
 ---
 
-![Survey overview](/assets/survey-overview.png)
-
----
-
 # What I heard from your survey
 
 - Python is the dominant language
@@ -62,26 +58,13 @@ That's a good place to start!
 
 ---
 
-# What you want to learn
-
-- Project structure, modules, and visibility
-- Error handling and testing
-- Traits and generics
-- Rust for web services
-
-The clearest concern: **the learning curve**.
-
----
-
 ![Survey results for Rust ecosystem interests](/assets/survey-ecosystem-interests.png)
 
 ---
 
-# This is interactive
+# This is interactive!
 
-Vote. Add your answers. Ask questions.
-
-Use the reaction bar whenever something is:
+Ask questions and use the reactions whenever something is:
 
 - 👏 useful
 - 💡 surprising
@@ -133,7 +116,7 @@ One book, movie, or TV show title per response.
 
 ---
 
-# Rust in one sentence
+# Rust, the pitch
 
 A systems programming language focused on:
 
@@ -145,7 +128,7 @@ A systems programming language focused on:
 
 ---
 
-# What feels different?
+# Why Rust is different
 
 - Code is compiled and statically checked
 - Ownership means **values** have **lifetimes**
@@ -155,9 +138,26 @@ A systems programming language focused on:
 
 ---
 
+# cargo: one tool for everything
+
+```sh
+cargo new       # create a project
+cargo add       # add a new dependency
+cargo build     # compile it
+cargo run       # run it
+cargo test      # test it
+cargo fmt       # format it
+cargo clippy    # catch suspicious code
+```
+
+It's a bit like `uv`.
+
+---
+
 # Complexity exists either way
 
-- Other languages often try to *hide complexity*
+- Computers are complicated.
+- Other languages often try to *hide complexity*.
 - That doesn't make it go away!
 
 Rust doesn't pretend systems are simple.
@@ -165,22 +165,7 @@ It gives you tools to deal with complexity.
 
 ---
 
-# cargo: one tool for everything
-
-```text
-cargo new       create a project
-cargo build     compile it
-cargo run       run it
-cargo test      test it
-cargo fmt       format it
-cargo clippy    catch suspicious code
-```
-
-It's a bit like `uv`.
-
----
-
-# Example task
+# Example: Word Counter
 
 Given a filename, return its **total word count**.
 
@@ -189,13 +174,13 @@ For today, a “word” is a non-empty sequence separated by whitespace.
 ```text
 Rust makes systems programming
 safer and more approachable.
+```
 
 → 8 words
-```
 
 ---
 
-# Python: start here
+# Python interface
 
 ```python code/word-count/python/step_01.py
 ```
@@ -217,7 +202,8 @@ Simple and correct (for the happy path).
 ```python code/word-count/python/step_03.py
 ```
 
-But what if `read()` raises an exception?
+- If we don't, we leak file handles
+- ...but what if `read()` raises an exception?
 
 ---
 
@@ -314,11 +300,12 @@ How does `split()` handle these?
 ```rust code/word-count/rust/step_01.rs
 ```
 
-```text
+```sh
 thread 'main' panicked at 'not yet implemented'
 ```
 
-`todo!()` compiles, but fails loudly if we reach it.
+- `todo!()` compiles, but fails loudly if we reach it.
+- It's a bit like `pass`, but terminates the program.
 
 ---
 
@@ -331,7 +318,7 @@ thread 'main' panicked at 'not yet implemented'
 
 # The compiler stops us
 
-```text
+```sh
 error[E0599]: no method named `split_whitespace`
 found for enum `Result` in the current scope
 ```
