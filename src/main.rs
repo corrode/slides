@@ -1,3 +1,4 @@
+mod archive;
 mod error;
 mod live;
 mod markdown;

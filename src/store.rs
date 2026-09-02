@@ -11,7 +11,7 @@ use sqlx::{
 
 use crate::models::{
     DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck, DeckSummary,
-    DeckVersion, LiveSession,
+    DeckVersion, EndedSessionSummary, LiveSession,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -30,6 +30,14 @@ pub struct WordCloudResponse {
 pub struct ReactionCount {
     pub kind: String,
     pub count: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SessionArtifact {
+    pub share_token: String,
+    pub archive: Vec<u8>,
+    pub code: String,
+    pub title: String,
 }
 
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -60,6 +68,19 @@ pub async fn list_decks(pool: &SqlitePool) -> Result<Vec<DeckSummary>> {
         FROM decks d
         ORDER BY d.updated_at DESC
         "#,
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn list_ended_sessions(pool: &SqlitePool) -> Result<Vec<EndedSessionSummary>> {
+    Ok(sqlx::query_as::<_, EndedSessionSummary>(
+        r#"SELECT v.title, s.code, a.share_token
+           FROM sessions s
+           JOIN deck_versions v ON v.id = s.deck_version_id
+           LEFT JOIN session_artifacts a ON a.session_id = s.id
+           WHERE s.ended_at IS NOT NULL
+           ORDER BY s.ended_at DESC"#,
     )
     .fetch_all(pool)
     .await?)
@@ -369,13 +390,84 @@ pub async fn set_interaction_state(
     Ok(())
 }
 
-pub async fn end_session(pool: &SqlitePool, id: i64) -> Result<()> {
-    sqlx::query("UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL")
-        .bind(now_millis())
-        .bind(id)
-        .execute(pool)
+pub async fn session_started_at(pool: &SqlitePool, id: i64) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT started_at FROM sessions WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub async fn artifact_for_session(
+    pool: &SqlitePool,
+    session_id: i64,
+) -> Result<Option<SessionArtifact>> {
+    Ok(sqlx::query_as::<_, SessionArtifact>(
+        r#"SELECT a.share_token, a.archive, s.code, v.title
+           FROM session_artifacts a
+           JOIN sessions s ON s.id = a.session_id
+           JOIN deck_versions v ON v.id = s.deck_version_id
+           WHERE a.session_id = ?"#,
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn artifact_by_token(pool: &SqlitePool, token: &str) -> Result<Option<SessionArtifact>> {
+    Ok(sqlx::query_as::<_, SessionArtifact>(
+        r#"SELECT a.share_token, a.archive, s.code, v.title
+           FROM session_artifacts a
+           JOIN sessions s ON s.id = a.session_id
+           JOIN deck_versions v ON v.id = s.deck_version_id
+           WHERE a.share_token = ?"#,
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn finish_session_with_artifact(
+    pool: &SqlitePool,
+    session_id: i64,
+    ended_at: i64,
+    share_token: &str,
+    archive: &[u8],
+) -> Result<String> {
+    let mut tx = pool.begin().await?;
+    if let Some(existing) = sqlx::query_scalar::<_, String>(
+        "SELECT share_token FROM session_artifacts WHERE session_id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        tx.commit().await?;
+        return Ok(existing);
+    }
+
+    let updated = sqlx::query("UPDATE sessions SET ended_at = COALESCE(ended_at, ?) WHERE id = ?")
+        .bind(ended_at)
+        .bind(session_id)
+        .execute(&mut *tx)
         .await?;
-    Ok(())
+    if updated.rows_affected() == 0 {
+        bail!("session does not exist");
+    }
+    sqlx::query(
+        r#"INSERT INTO session_artifacts
+           (session_id, share_token, format_version, archive, created_at)
+           VALUES (?, ?, 1, ?, ?)"#,
+    )
+    .bind(session_id)
+    .bind(share_token)
+    .bind(archive)
+    .bind(now_millis())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(share_token.to_owned())
 }
 
 pub async fn replace_answer(
@@ -753,7 +845,24 @@ mod tests {
             3
         );
 
-        end_session(&pool, session.id).await.unwrap();
+        let token = "a".repeat(64);
+        finish_session_with_artifact(&pool, session.id, now_millis(), &token, b"archive")
+            .await
+            .unwrap();
+        let artifact = artifact_for_session(&pool, session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(artifact.share_token, token);
+        assert_eq!(artifact.archive, b"archive");
+        assert_eq!(
+            artifact_by_token(&pool, &token)
+                .await
+                .unwrap()
+                .unwrap()
+                .code,
+            session.code
+        );
         assert!(
             active_session_for_deck(&pool, deck.id)
                 .await

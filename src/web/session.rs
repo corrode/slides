@@ -15,6 +15,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::Deserialize;
 
 use crate::{
+    archive,
     error::{AppError, AppResult},
     live::LiveUpdate,
     markdown::{DeckDocument, Interaction, parse_deck},
@@ -552,9 +553,54 @@ pub async fn end(
     let session = required_session(&state, &code).await?;
     let runtime = state.hub.runtime(session.id).await;
     let _guard = runtime.mutation.lock().await;
-    store::end_session(&state.pool, session.id).await?;
+    let session = store::get_session(&state.pool, session.id).await?;
+    let token = ensure_session_artifact(&state, &session).await?;
     state.hub.finish(session.id).await;
-    Ok(Redirect::to("/admin").into_response())
+    Ok(Redirect::to(&format!("/shared/{token}/")).into_response())
+}
+
+pub async fn create_artifact(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = required_session(&state, &code).await?;
+    let runtime = state.hub.runtime(session.id).await;
+    let _guard = runtime.mutation.lock().await;
+    let session = store::get_session(&state.pool, session.id).await?;
+    if session.ended_at.is_none() {
+        return Err(AppError::bad_request(
+            "End the presentation before creating its archive.",
+        ));
+    }
+    let token = ensure_session_artifact(&state, &session).await?;
+    Ok(Redirect::to(&format!("/shared/{token}/")).into_response())
+}
+
+async fn ensure_session_artifact(state: &AppState, session: &LiveSession) -> AppResult<String> {
+    if let Some(artifact) = store::artifact_for_session(&state.pool, session.id).await? {
+        return Ok(artifact.share_token);
+    }
+
+    let version = store::get_version(&state.pool, session.deck_version_id).await?;
+    let document = parse_deck(&version.source)?;
+    let started_at = store::session_started_at(&state.pool, session.id).await?;
+    let ended_at = session.ended_at.unwrap_or_else(store::now_millis);
+    let archive = archive::build(
+        &state.pool,
+        session,
+        &version,
+        &document,
+        started_at,
+        ended_at,
+    )
+    .await?;
+    let token = super::random_token();
+    Ok(
+        store::finish_session_with_artifact(&state.pool, session.id, ended_at, &token, &archive)
+            .await?,
+    )
 }
 
 async fn mutate_position(

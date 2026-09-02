@@ -23,6 +23,13 @@ pub struct DeckSummary {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct EndedSessionSummary {
+    pub title: String,
+    pub code: String,
+    pub share_token: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct DeckVersion {
     pub id: i64,
     pub title: String,

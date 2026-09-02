@@ -59,6 +59,34 @@
       </li>
       {% endfor %}
     </ul>
+
+    {% if !ended_sessions.is_empty() %}
+    <section class="ended-sessions" aria-labelledby="ended-sessions-title">
+      <header>
+        <p class="eyebrow">History</p>
+        <h2 id="ended-sessions-title">Ended sessions</h2>
+      </header>
+      <ul class="ended-session-list">
+        {% for session in ended_sessions %}
+        <li>
+          <div>
+            <strong>{{ session.title }}</strong>
+            <small>Session {{ session.code }}</small>
+          </div>
+          <div class="ended-session-actions">
+            {% match session.share_token %}
+              {% when Some with (token) %}
+                <a class="button secondary small" href="/shared/{{ token }}/">Open archive</a>
+                <a class="button ghost small" href="/shared/{{ token }}/download">Download ZIP</a>
+              {% when None %}
+                <form method="post" action="/admin/sessions/{{ session.code }}/artifact"><button class="secondary small" type="submit">Create archive</button></form>
+            {% endmatch %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
   </main>
 
   <section id="create-presentation" class="create-popover" popover role="dialog" aria-labelledby="create-presentation-title">

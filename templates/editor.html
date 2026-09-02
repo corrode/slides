@@ -43,7 +43,10 @@
               <label>Accent <input type="color" name="accent" value="{{ deck.theme_accent }}"></label>
             </div>
           </details>
-          <button class="ghost editor-publish" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6"/></svg>Publish version</button>
+          <div class="editor-actions">
+            <button class="secondary" type="button" data-print-url="/admin/decks/{{ deck.slug }}/print" data-print-form="#deck-form"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM9 12h6M9 16h6M14 3v4h4"/></svg>Open PDF</button>
+            <button class="ghost" type="button" hx-post="/admin/decks/{{ deck.slug }}/publish" hx-include="#deck-form" hx-target="#notice"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6"/></svg>Publish version</button>
+          </div>
         </form>
         <details class="editor-examples">
           <summary>Interactive Markdown examples</summary>

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::{
     error::{AppError, AppResult},
     markdown::{DeckDocument, parse_deck, resolve_code_references},
-    models::{Deck, DeckSummary, Theme},
+    models::{Deck, DeckSummary, EndedSessionSummary, Theme},
     store,
     web::{AppState, is_admin, require_admin, template},
 };
@@ -28,6 +28,7 @@ struct LoginTemplate {
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
     decks: Vec<DeckSummary>,
+    ended_sessions: Vec<EndedSessionSummary>,
 }
 
 #[derive(Template)]
@@ -37,6 +38,14 @@ struct EditorTemplate {
     published_versions: i64,
     active_code: Option<String>,
     initial_preview: String,
+}
+
+#[derive(Template)]
+#[template(path = "print.html")]
+struct PrintTemplate {
+    title: String,
+    theme_style: String,
+    slides: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +102,7 @@ pub async fn dashboard(State(state): State<AppState>, jar: CookieJar) -> AppResu
     }
     template(DashboardTemplate {
         decks: store::list_decks(&state.pool).await?,
+        ended_sessions: store::list_ended_sessions(&state.pool).await?,
     })
 }
 
@@ -188,6 +198,25 @@ pub async fn save(
         "<div id=\"notice\" hx-swap-oob=\"innerHTML\"></div><section id=\"preview\" hx-swap-oob=\"innerHTML\">{preview}</section>"
     ))
     .into_response())
+}
+
+pub async fn print_deck(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+    Form(form): Form<DeckForm>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    required_deck(&state, &slug).await?;
+    validate_deck_form(&form)?;
+    let document =
+        parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let theme = theme_from_form(&form);
+    template(PrintTemplate {
+        title: form.title.trim().into(),
+        theme_style: theme.style(),
+        slides: render::printable(&document),
+    })
 }
 
 pub async fn publish(

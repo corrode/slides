@@ -175,6 +175,28 @@
     control.click();
   }
 
+  function submitPrintView(button) {
+    const sourceForm = document.querySelector(button.dataset.printForm);
+    if (!(sourceForm instanceof HTMLFormElement) || !sourceForm.reportValidity()) return;
+
+    const printForm = document.createElement("form");
+    printForm.method = "post";
+    printForm.action = button.dataset.printUrl;
+    printForm.target = "_blank";
+    printForm.hidden = true;
+    new FormData(sourceForm).forEach((value, name) => {
+      if (typeof value !== "string") return;
+      const field = document.createElement("input");
+      field.type = "hidden";
+      field.name = name;
+      field.value = value;
+      printForm.append(field);
+    });
+    document.body.append(printForm);
+    printForm.submit();
+    printForm.remove();
+  }
+
   async function copyText(value) {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(value);
@@ -258,6 +280,12 @@
     restorePreviewSlide();
   });
 
+  window.addEventListener("load", () => {
+    if (document.body.matches("[data-print-deck]")) {
+      window.setTimeout(() => window.print(), 100);
+    }
+  });
+
   document.addEventListener("keydown", keyboardNavigation);
 
   window.addEventListener("hashchange", () => {
@@ -272,6 +300,16 @@
   });
 
   document.addEventListener("click", (event) => {
+    const printNow = event.target.closest("[data-print-now]");
+    if (printNow) {
+      window.print();
+      return;
+    }
+    const openPrint = event.target.closest("[data-print-url]");
+    if (openPrint) {
+      submitPrintView(openPrint);
+      return;
+    }
     const previewControl = event.target.closest("[data-preview-nav]");
     if (previewControl) {
       const deck = previewControl.closest("[data-preview-deck]");

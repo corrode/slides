@@ -28,6 +28,54 @@ struct LiveData {
     hand_raised: bool,
 }
 
+pub fn printable(document: &DeckDocument) -> String {
+    document
+        .slides
+        .iter()
+        .map(|slide| {
+            let mut body = slide.html.clone();
+            if let Some(interaction) = &slide.interaction {
+                body.push_str(&preview_interaction(interaction));
+            }
+            format!(
+                "<article class=\"print-slide\"><div class=\"slide-content\">{body}</div></article>"
+            )
+        })
+        .collect()
+}
+
+pub async fn archived_slides(
+    pool: &SqlitePool,
+    session: &LiveSession,
+    document: &DeckDocument,
+) -> Result<String> {
+    let mut slides = String::new();
+    for (index, slide) in document.slides.iter().enumerate() {
+        let data = live_data(pool, session, slide, index, None).await?;
+        let interaction = slide
+            .interaction
+            .as_ref()
+            .map(|spec| {
+                interaction_results(
+                    spec,
+                    &data.counts,
+                    data.answerers,
+                    index,
+                    &data.word_cloud_responses,
+                    &data.ordering_values,
+                    false,
+                )
+            })
+            .unwrap_or_default();
+        slides.push_str(&format!(
+            "<article class=\"archive-slide\"><div class=\"slide-content\">{}{interaction}{}</div></article>",
+            slide.html,
+            archived_reactions(&data.reactions),
+        ));
+    }
+    Ok(slides)
+}
+
 pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
     if document.slides.is_empty() {
         return "<div class=\"empty-state\">Nothing to preview yet.</div>".into();
@@ -87,6 +135,28 @@ pub async fn live(
         current
     };
     let slide = &document.slides[index];
+    let data = live_data(pool, session, slide, index, participant_hash).await?;
+
+    Ok(match view {
+        LiveView::Presenter => presenter_view(session, version, document, slide, index, &data),
+        LiveView::Audience => audience_view(
+            session,
+            &version.title,
+            slide,
+            index,
+            document.slides.len(),
+            &data,
+        ),
+    })
+}
+
+async fn live_data(
+    pool: &SqlitePool,
+    session: &LiveSession,
+    slide: &Slide,
+    index: usize,
+    participant_hash: Option<&str>,
+) -> Result<LiveData> {
     let selected = if let Some(participant_hash) = participant_hash {
         store::selected_values(pool, session.id, index, participant_hash).await?
     } else {
@@ -118,7 +188,7 @@ pub async fn live(
     } else {
         false
     };
-    let data = LiveData {
+    Ok(LiveData {
         selected,
         counts,
         word_cloud_responses,
@@ -127,19 +197,30 @@ pub async fn live(
         answerers: store::answerer_count(pool, session.id, index).await?,
         raised_hands: store::raised_hand_count(pool, session.id).await?,
         hand_raised,
-    };
-
-    Ok(match view {
-        LiveView::Presenter => presenter_view(session, version, document, slide, index, &data),
-        LiveView::Audience => audience_view(
-            session,
-            &version.title,
-            slide,
-            index,
-            document.slides.len(),
-            &data,
-        ),
     })
+}
+
+fn archived_reactions(reactions: &HashMap<String, i64>) -> String {
+    let items = [
+        ("applause", "👏", "Applause"),
+        ("lightbulb", "💡", "Lightbulb"),
+        ("question", "❓", "Question"),
+    ]
+    .into_iter()
+    .filter_map(|(key, symbol, label)| {
+        let count = reactions.get(key).copied().unwrap_or_default();
+        (count > 0).then(|| {
+            format!(
+                "<span title=\"{label}\"><span aria-hidden=\"true\">{symbol}</span> {count}</span>"
+            )
+        })
+    })
+    .collect::<String>();
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<aside class=\"archive-reactions\"><strong>Reactions</strong>{items}</aside>")
+    }
 }
 
 fn presenter_view(
@@ -172,6 +253,7 @@ fn presenter_view(
                 index,
                 &data.word_cloud_responses,
                 &data.ordering_values,
+                true,
             )
         })
         .unwrap_or_default();
@@ -329,6 +411,7 @@ fn audience_interaction(
             slide_index,
             &data.word_cloud_responses,
             &data.ordering_values,
+            true,
         );
     }
     if !session.interaction_open {
@@ -433,6 +516,7 @@ fn interaction_results(
     slide_index: usize,
     word_cloud_responses: &[store::WordCloudResponse],
     ordering_values: &[String],
+    animate_charts: bool,
 ) -> String {
     match spec {
         Interaction::Poll {
@@ -444,7 +528,14 @@ fn interaction_results(
             "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\">{}<span style=\"margin-left:auto\">{}</span></div>{}</section>",
             optional_heading(question.as_deref()),
             answer_count_label(answerers),
-            chart(options, counts, answerers, *orientation, slide_index),
+            chart(
+                options,
+                counts,
+                answerers,
+                *orientation,
+                slide_index,
+                animate_charts,
+            ),
         ),
         Interaction::WordCloud { prompt, .. } => {
             let max = counts.values().copied().max().unwrap_or(1).max(1);
@@ -497,6 +588,7 @@ fn interaction_results(
                     answerers,
                     ChartOrientation::Horizontal,
                     slide_index,
+                    animate_charts,
                 )
             )
         }
@@ -618,6 +710,7 @@ fn chart(
     answerers: i64,
     orientation: ChartOrientation,
     slide_index: usize,
+    animate: bool,
 ) -> String {
     let denominator = answerers.max(1) as f64;
     match orientation {
@@ -628,7 +721,8 @@ fn chart(
                 .map(|(index, option)| {
                     let count = *counts.get(&index.to_string()).unwrap_or(&0);
                     let percentage = (count as f64 / denominator * 100.0).round() as i64;
-                    format!("<div class=\"result-row\"><span>{}</span><div class=\"bar-track\"><div class=\"bar-fill live\" style=\"--value:0%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\"></div></div><span>{} · {}%</span></div>", encode_text(option), slide_index, index, percentage, count, percentage)
+                    let initial = if animate { 0 } else { percentage };
+                    format!("<div class=\"result-row\"><span>{}</span><div class=\"bar-track\"><div class=\"bar-fill live\" style=\"--value:{initial}%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\"></div></div><span>{} · {}%</span></div>", encode_text(option), slide_index, index, percentage, count, percentage)
                 })
                 .collect::<String>();
             format!("<div class=\"results\">{rows}</div>")
@@ -640,7 +734,8 @@ fn chart(
                 .map(|(index, option)| {
                     let count = *counts.get(&index.to_string()).unwrap_or(&0);
                     let percentage = (count as f64 / denominator * 100.0).round() as i64;
-                    format!("<div class=\"vertical-bar\" role=\"img\" aria-label=\"{}: {} responses, {} percent\" style=\"--value:0%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\" data-label=\"{}\"></div>", encode_double_quoted_attribute(option), count, percentage, slide_index, index, percentage, encode_double_quoted_attribute(option))
+                    let initial = if animate { 0 } else { percentage };
+                    format!("<div class=\"vertical-bar\" role=\"img\" aria-label=\"{}: {} responses, {} percent\" style=\"--value:{initial}%\" data-live-bar=\"slide-{}-option-{}\" data-bar-value=\"{}\" data-label=\"{}\"></div>", encode_double_quoted_attribute(option), count, percentage, slide_index, index, percentage, encode_double_quoted_attribute(option))
                 })
                 .collect::<String>();
             format!("<div class=\"vertical-chart\">{bars}</div>")
@@ -802,11 +897,23 @@ mod tests {
 
     use super::{
         LiveData, audience_interaction, audience_view, interaction_results, ordering_response,
-        ordering_results, presenter_view, preview,
+        ordering_results, presenter_view, preview, printable,
     };
 
     fn options() -> Vec<String> {
         ["First", "Second", "Third"].map(str::to_owned).to_vec()
+    }
+
+    #[test]
+    fn printable_contains_every_slide_without_navigation() {
+        let document = parse_deck("# First\n\n---\n\n# Second").unwrap();
+
+        let html = printable(&document);
+
+        assert_eq!(html.matches("class=\"print-slide\"").count(), 2);
+        assert!(!html.contains("data-preview-nav"));
+        assert!(html.contains("<h1>First</h1>"));
+        assert!(html.contains("<h1>Second</h1>"));
     }
 
     #[test]
@@ -852,7 +959,7 @@ mod tests {
 
         let preview = preview(&document, &theme);
         let audience = audience_interaction(&session, 0, interaction, &data);
-        let results = interaction_results(interaction, &data.counts, 0, 0, &[], &[]);
+        let results = interaction_results(interaction, &data.counts, 0, 0, &[], &[], true);
 
         assert!(!preview.contains("<h2>"));
         assert!(!audience.contains("<h2>"));
@@ -860,6 +967,18 @@ mod tests {
         assert!(preview.contains("Coffee"));
         assert!(audience.contains("Choose one answer."));
         assert!(results.contains("0 answers"));
+    }
+
+    #[test]
+    fn archived_charts_render_their_final_values_without_javascript() {
+        let document = parse_deck(":::poll\n- Alpha\n- Beta\n:::").unwrap();
+        let interaction = document.slides[0].interaction.as_ref().unwrap();
+        let counts = [("0".to_owned(), 2)].into_iter().collect();
+
+        let html = interaction_results(interaction, &counts, 2, 0, &[], &[], false);
+
+        assert!(html.contains("style=\"--value:100%\""));
+        assert!(html.contains("style=\"--value:0%\""));
     }
 
     #[test]
@@ -884,7 +1003,7 @@ mod tests {
             },
         ];
 
-        let html = interaction_results(interaction, &counts, 3, 0, &responses, &[]);
+        let html = interaction_results(interaction, &counts, 3, 0, &responses, &[], true);
         let participant_color = super::participant_color("participant-a");
 
         assert_eq!(html.matches("--word-color:").count(), 3);

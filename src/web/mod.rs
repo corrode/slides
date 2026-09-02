@@ -1,6 +1,7 @@
 mod admin;
-mod render;
+pub(crate) mod render;
 mod session;
+mod shared;
 
 use std::sync::Arc;
 
@@ -43,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/decks", post(admin::create_deck))
         .route("/admin/decks/{slug}/edit", get(admin::editor))
         .route("/admin/decks/{slug}/save", post(admin::save))
+        .route("/admin/decks/{slug}/print", post(admin::print_deck))
         .route("/admin/decks/{slug}/publish", post(admin::publish))
         .route("/admin/decks/{slug}/sessions", post(admin::start_session))
         .route("/present/{code}", get(session::presenter))
@@ -60,6 +62,14 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{code}/answer", post(session::answer))
         .route("/sessions/{code}/react/{kind}", post(session::react))
         .route("/sessions/{code}/end", post(session::end))
+        .route(
+            "/admin/sessions/{code}/artifact",
+            post(session::create_artifact),
+        )
+        .route("/shared/{token}", get(shared::redirect_to_archive))
+        .route("/shared/{token}/", get(shared::archive_page))
+        .route("/shared/{token}/download", get(shared::download))
+        .route("/shared/{token}/{*path}", get(shared::archive_file))
         .nest_service("/assets", ServeDir::new("assets"))
         .route("/{slug}", get(session::named_shortlink))
         .layer(SetResponseHeaderLayer::if_not_present(
