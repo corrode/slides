@@ -135,6 +135,11 @@ jobs:
           fi
 
           if [ -n "${app_uuid}" ] && [ "${COOLIFY_RECREATE_RESOURCE}" = "true" ]; then
+            if ! timeout 60 docker manifest inspect "${IMAGE_NAME}:latest" >/dev/null; then
+              echo "${IMAGE_NAME}:latest is not anonymously pullable; refusing to replace the live application." >&2
+              exit 1
+            fi
+
             curl --request DELETE \
               "${COOLIFY_BASE_URL}/api/v1/applications/${app_uuid}" \
               --header "Authorization: Bearer ${COOLIFY_TOKEN}" \
@@ -176,41 +181,17 @@ jobs:
               environment_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${environment}")"
             fi
 
-            github_apps="$(api_get /github-apps)"
-            github_app_uuid=""
-            while IFS= read -r github_app; do
-              github_app_id="$(jq --raw-output '.id' <<<"${github_app}")"
-              if repositories="$(api_get "/github-apps/${github_app_id}/repositories")"; then
-                if jq --exit-status \
-                  '.repositories | any((.full_name // .name_with_owner // "") == "corrode/slides")' \
-                  <<<"${repositories}" >/dev/null; then
-                  github_app_uuid="$(jq --raw-output '.uuid' <<<"${github_app}")"
-                  break
-                fi
-              fi
-            done < <(jq --compact-output '.[]' <<<"${github_apps}")
-
-            if [ -z "${github_app_uuid}" ]; then
-              echo "No Coolify GitHub App with access to corrode/slides was found." >&2
-              jq '[.[] | {name, organization, uuid}]' <<<"${github_apps}"
-              exit 1
-            fi
-
             create_payload="$(jq --null-input \
               --arg project "${project_uuid}" \
               --arg environment "${environment_uuid}" \
               --arg server "${server_uuid}" \
-              --arg github_app "${github_app_uuid}" \
               '{
                 project_uuid: $project,
                 environment_name: "production",
                 environment_uuid: $environment,
                 server_uuid: $server,
-                github_app_uuid: $github_app,
-                git_repository: "corrode/slides",
-                git_branch: "main",
-                build_pack: "dockerfile",
-                dockerfile_location: "/Dockerfile",
+                docker_registry_image_name: "ghcr.io/corrode/slides",
+                docker_registry_image_tag: "latest",
                 ports_exposes: "3000",
                 custom_docker_run_options: "--mount type=volume,source=slides-data,target=/app/data",
                 name: "slides",
@@ -222,10 +203,9 @@ jobs:
                 health_check_method: "GET",
                 health_check_return_code: 200,
                 health_check_scheme: "http",
-                is_auto_deploy_enabled: false,
                 instant_deploy: false
               }')"
-            application="$(api_send POST /applications/private-github-app "${create_payload}")"
+            application="$(api_send POST /applications/dockerimage "${create_payload}")"
             app_uuid="$(jq --exit-status --raw-output '.uuid' <<<"${application}")"
             echo "Created Coolify application ${app_uuid}."
           fi
