@@ -505,6 +505,8 @@ select {
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   color: var(--text);
+  font: inherit;
+  font-size: 1rem;
 }
 
 input,
@@ -890,8 +892,9 @@ pre {
   overflow: auto;
   margin: 1rem 0;
   padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #181825;
+  background: #181825 !important;
   color: var(--syntax-variable);
   font-size: 0.88em;
   line-height: 1.6;
@@ -1109,7 +1112,7 @@ pre code {
   bottom: 5.4rem;
   width: max-content;
   max-width: calc(100% - 1rem);
-  justify-content: center;
+  justify-content: flex-start;
   overflow-x: auto;
   padding: 0.4rem;
   border: 1px solid var(--border);
@@ -1123,6 +1126,16 @@ pre code {
 
 .audience-actions::-webkit-scrollbar {
   display: none;
+}
+
+.audience-actions .hand-button,
+.audience-actions .reactions {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.audience-actions .reactions {
+  flex-wrap: nowrap;
 }
 
 .audience-slide-content {

@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{io::Cursor, sync::OnceLock};
 
 use anyhow::{Context, Result, bail};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html};
@@ -479,10 +479,8 @@ fn highlight_code(language: &str, code: &str) -> String {
 
     let syntaxes = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
     let theme = THEME.get_or_init(|| {
-        ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .expect("built-in syntect theme")
+        let mut reader = Cursor::new(include_bytes!("../assets/catppuccin-mocha.tmTheme"));
+        ThemeSet::load_from_reader(&mut reader).expect("embedded Catppuccin Mocha theme")
     });
     let syntax = syntaxes
         .find_syntax_by_token(language)
@@ -495,6 +493,18 @@ fn highlight_code(language: &str, code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlights_code_with_catppuccin_mocha() {
+        let html = highlight_code(
+            "rust",
+            "async fn main() { let string = \"mocha\"; let number = 42; }\n",
+        );
+
+        assert!(html.contains("#cba6f7"));
+        assert!(html.contains("#a6e3a1"));
+        assert!(html.contains("#fab387"));
+    }
 
     #[test]
     fn parses_slides_and_poll() {
