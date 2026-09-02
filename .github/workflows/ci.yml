@@ -98,6 +98,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          COOLIFY_TOKEN="${COOLIFY_TOKEN//[[:space:]]/}"
+          COOLIFY_TOKEN="${COOLIFY_TOKEN#Bearer}"
           if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${ADMIN_TOKEN}" ]; then
             echo "The COOLIFY_TOKEN and ADMIN_TOKEN repository secrets are required." >&2
             exit 1
