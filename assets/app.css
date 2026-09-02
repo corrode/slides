@@ -933,6 +933,8 @@ code {
 }
 
 pre {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow: auto;
   margin: 1rem 0;
@@ -1220,6 +1222,7 @@ pre code {
 }
 
 .audience-slide {
+  min-width: 0;
   overflow: visible;
   padding: 0;
   background: transparent;
