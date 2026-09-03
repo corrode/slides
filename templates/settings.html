@@ -67,7 +67,7 @@
         <p class="eyebrow">API v1</p>
         <h2 id="api-docs-title">Use the API</h2>
         <p>Send the token as a bearer credential with every request:</p>
-        <pre><code>Authorization: Bearer &lt;token&gt;</code></pre>
+        {{ authorization_example|safe }}
 
         <h3>Endpoints</h3>
         <dl class="api-endpoints">
@@ -80,32 +80,12 @@
 
         <h3>Upload a presentation</h3>
         <p>Save the generated deck as <code>presentation.json</code>:</p>
-        <pre><code>{
-  "title": "Reliable Rust services",
-  "slug": "reliable-rust-services",
-  "source": "# Reliable Rust services\n\nOne idea per slide.\n\n---\n\n# Start with failure modes",
-  "theme": {
-    "font": "system",
-    "background": "#1e1e2e",
-    "text": "#cdd6f4",
-    "accent": "#f9e2af"
-  }
-}</code></pre>
-        <pre><code>curl --fail-with-body \
-  --request POST \
-  --url "$SLIDES_URL/api/v1/presentations" \
-  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data @presentation.json</code></pre>
+        {{ create_json_example|safe }}
+        {{ create_curl_example|safe }}
         <p>The <code>slug</code> and <code>theme</code> fields are optional. If omitted, the server derives a unique slug and uses the default theme.</p>
 
         <h3>Update Markdown</h3>
-        <pre><code>curl --fail-with-body \
-  --request PATCH \
-  --url "$SLIDES_URL/api/v1/presentations/reliable-rust-services" \
-  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"source":"# Revised deck\n\nUpdated content."}'</code></pre>
+        {{ update_curl_example|safe }}
         <p>Create and source updates validate Slides Markdown before saving. JSON errors include a stable <code>error.code</code> and human-readable <code>error.message</code>.</p>
       </section>
     </div>

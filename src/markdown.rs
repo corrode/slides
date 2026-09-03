@@ -639,7 +639,8 @@ fn render_code_block(language: &str, code: &str) -> String {
     highlight_code(language, code)
 }
 
-fn highlight_code(language: &str, code: &str) -> String {
+/// Render a syntax-highlighted HTML code block using the bundled theme.
+pub fn highlight_code(language: &str, code: &str) -> String {
     static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
     static THEME: OnceLock<Theme> = OnceLock::new();
 

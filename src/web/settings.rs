@@ -8,16 +8,46 @@ use axum_extra::extract::cookie::CookieJar;
 
 use crate::{
     error::AppResult,
+    markdown::highlight_code,
     models::ApiTokenSummary,
     store,
     web::{AppState, hash, is_admin, random_token, require_admin, template},
 };
+
+const AUTHORIZATION_EXAMPLE: &str = "Authorization: Bearer <token>";
+const CREATE_JSON_EXAMPLE: &str = r##"{
+  "title": "Reliable Rust services",
+  "slug": "reliable-rust-services",
+  "source": "# Reliable Rust services\n\nOne idea per slide.\n\n---\n\n# Start with failure modes",
+  "theme": {
+    "font": "system",
+    "background": "#1e1e2e",
+    "text": "#cdd6f4",
+    "accent": "#f9e2af"
+  }
+}"##;
+const CREATE_CURL_EXAMPLE: &str = r#"curl --fail-with-body \
+  --request POST \
+  --url "$SLIDES_URL/api/v1/presentations" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data @presentation.json"#;
+const UPDATE_CURL_EXAMPLE: &str = r##"curl --fail-with-body \
+  --request PATCH \
+  --url "$SLIDES_URL/api/v1/presentations/reliable-rust-services" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"source":"# Revised deck\n\nUpdated content."}'"##;
 
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
     token: Option<ApiTokenSummary>,
     revealed_token: Option<String>,
+    authorization_example: String,
+    create_json_example: String,
+    create_curl_example: String,
+    update_curl_example: String,
 }
 
 pub async fn page(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
@@ -45,6 +75,10 @@ async fn render_settings(state: &AppState, revealed_token: Option<String>) -> Ap
     let mut response = template(SettingsTemplate {
         token: store::api_token(&state.pool).await?,
         revealed_token,
+        authorization_example: highlight_code("http", AUTHORIZATION_EXAMPLE),
+        create_json_example: highlight_code("json", CREATE_JSON_EXAMPLE),
+        create_curl_example: highlight_code("sh", CREATE_CURL_EXAMPLE),
+        update_curl_example: highlight_code("sh", UPDATE_CURL_EXAMPLE),
     })?;
     response
         .headers_mut()
@@ -110,6 +144,7 @@ mod tests {
         );
 
         let body = response_body(response).await;
+        assert!(body.contains("#a6e3a1"));
         let token = body
             .split("id=\"api-token-value\" value=\"")
             .nth(1)
