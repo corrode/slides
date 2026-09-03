@@ -152,6 +152,22 @@ jobs:
           upsert_env SLIDES_SECURE_COOKIES \
             '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}'
 
+          storages="$(api_get "/applications/${COOLIFY_RESOURCE_UUID}/storages")"
+          if jq --exit-status \
+            'any(.[]; .mount_path == "/app/data")' \
+            <<<"${storages}" >/dev/null; then
+            echo "Persistent storage is mounted at /app/data."
+          elif jq --exit-status \
+            'any(.[]; .name == "slides-data")' \
+            <<<"${storages}" >/dev/null; then
+            echo "The slides-data volume exists but is not mounted at /app/data." >&2
+            exit 1
+          else
+            api_send POST "/applications/${COOLIFY_RESOURCE_UUID}/storages" \
+              '{"type":"persistent","name":"slides-data","mount_path":"/app/data"}' >/dev/null
+            echo "Created slides-data storage at /app/data."
+          fi
+
       - name: Deploy and wait for Coolify
         env:
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
