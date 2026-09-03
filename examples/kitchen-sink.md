@@ -178,6 +178,22 @@ Reactions update live without refreshing the page and fly up the screen when mot
 
 ---
 
+# Diagram the flow
+
+Mermaid fences turn text into diagrams across previews, live views, PDFs, and archives.
+
+```mermaid
+flowchart LR
+    accTitle: Live presentation workflow
+    accDescr: A Markdown draft becomes a published session where the audience participates before the results are archived.
+    A[Draft Markdown] --> B[Publish version]
+    B --> C[Start session]
+    C --> D[Audience participates]
+    D --> E[Archive results]
+```
+
+---
+
 # That's the whole kitchen sink
 
 Markdown authoring. Live control. Audience participation. Animated results.

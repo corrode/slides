@@ -1,7 +1,9 @@
 mod admin;
+mod api;
 mod playground;
 pub(crate) mod render;
 mod session;
+mod settings;
 mod shared;
 
 use std::sync::Arc;
@@ -38,6 +40,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(session::landing))
         .route("/healthz", get(healthz))
+        .nest("/api/v1", api::router())
         .route(
             "/api/playground/run",
             post(playground::run).layer(DefaultBodyLimit::max(70 * 1024)),
@@ -46,6 +49,15 @@ pub fn router(state: AppState) -> Router {
         .route("/join/{code}", get(session::audience))
         .route("/admin/login", get(admin::login_page).post(admin::login))
         .route("/admin", get(admin::dashboard))
+        .route("/admin/settings", get(settings::page))
+        .route(
+            "/admin/settings/api-token",
+            post(settings::rotate_token),
+        )
+        .route(
+            "/admin/settings/api-token/revoke",
+            post(settings::revoke_token),
+        )
         .route("/admin/decks", post(admin::create_deck))
         .route("/admin/decks/{slug}/delete", post(admin::delete_deck))
         .route("/admin/decks/{slug}/edit", get(admin::editor))

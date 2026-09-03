@@ -539,7 +539,7 @@ fn render_markdown(source: &str) -> String {
             Event::End(TagEnd::CodeBlock) => {
                 if let Some((language, code)) = code_block.take() {
                     rendered_events.push(Event::Html(CowStr::Boxed(
-                        highlight_code(&language, &code).into_boxed_str(),
+                        render_code_block(&language, &code).into_boxed_str(),
                     )));
                 }
             }
@@ -628,6 +628,17 @@ fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
     }
 }
 
+fn render_code_block(language: &str, code: &str) -> String {
+    if language.trim().eq_ignore_ascii_case("mermaid") {
+        return format!(
+            "<figure class=\"mermaid-diagram\" data-mermaid-diagram><pre class=\"mermaid-source\" data-mermaid-source><code>{}</code></pre><div class=\"mermaid-output\" data-mermaid-output hidden></div><p class=\"mermaid-error\" data-mermaid-error role=\"status\" hidden>Could not render this diagram. Check the Mermaid syntax.</p></figure>",
+            html_escape::encode_text(code)
+        );
+    }
+
+    highlight_code(language, code)
+}
+
 fn highlight_code(language: &str, code: &str) -> String {
     static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
     static THEME: OnceLock<Theme> = OnceLock::new();
@@ -653,6 +664,21 @@ fn highlight_code(language: &str, code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_mermaid_blocks_as_safe_client_side_diagrams() {
+        let deck = parse_deck(
+            "```mermaid\nflowchart LR\n    A[<script>alert('no')</script>] --> B[Safe]\n```",
+        )
+        .unwrap();
+        let html = &deck.slides[0].html;
+
+        assert!(html.contains("data-mermaid-diagram"));
+        assert!(html.contains("data-mermaid-source"));
+        assert!(html.contains("data-mermaid-output"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
 
     #[test]
     fn highlights_code_with_catppuccin_mocha() {
@@ -689,7 +715,7 @@ mod tests {
     fn kitchen_sink_example_covers_every_interaction() {
         let deck = parse_deck(include_str!("../examples/kitchen-sink.md")).unwrap();
 
-        assert_eq!(deck.slides.len(), 15);
+        assert_eq!(deck.slides.len(), 16);
         assert_eq!(
             deck.slides
                 .iter()
@@ -729,6 +755,11 @@ mod tests {
             deck.slides[8].interaction,
             Some(Interaction::Poll { multiple: true, .. })
         ));
+        assert!(
+            deck.slides
+                .iter()
+                .any(|slide| slide.html.contains("data-mermaid-diagram"))
+        );
     }
 
     #[test]

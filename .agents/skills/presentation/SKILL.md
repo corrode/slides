@@ -125,6 +125,27 @@ Ordering interactions require at least two top-level `- ` items. Write them in t
 
 Always close every interaction with a line containing exactly `:::`.
 
+### Mermaid diagrams
+
+Use a fenced `mermaid` block when a diagram communicates structure, sequence, state, or flow more clearly than prose. Mermaid diagrams work in previews, live sessions, print/PDF output, and offline archives, and they do not count as slide interactions.
+
+Prefer simple, legible diagrams with short labels. Favor top-to-bottom layouts such as `flowchart TD` when a left-to-right diagram would become too wide for a 16:9 slide. Common useful forms include `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `timeline`, `mindmap`, `pie`, and `gantt`.
+
+Add `accTitle` and `accDescr` declarations so the generated SVG is understandable to assistive technology:
+
+````markdown
+# From draft to delivery
+
+```mermaid
+flowchart TD
+    accTitle: Presentation publishing workflow
+    accDescr: A draft is reviewed, published, and delivered to the audience.
+    Draft --> Review --> Publish --> Present
+```
+````
+
+Do not use Mermaid initialization directives, custom scripts, click callbacks, raw HTML, or unverified external resources. The app renders diagrams in strict security mode. Keep each diagram small enough to read at presentation distance.
+
 ### Code
 
 Use ordinary fenced code blocks with a language identifier. Inline generated code is safest and makes the deck portable.
@@ -158,10 +179,25 @@ Before responding, verify all of the following:
 - Polls and ordering blocks have at least two valid items.
 - Quizzes have at least two valid options and at least one `[x]` answer.
 - Word-cloud blocks have no body.
+- Every Mermaid block starts with a supported diagram type, uses concise labels, and includes accessibility text.
 - Interaction names and attributes exactly match the supported syntax.
 - The first slide begins with content, not metadata or a separator.
 - The deck ends with slide content, not a trailing separator.
 
+## Uploading to a Slides server
+
+Only upload a deck when the user explicitly asks you to upload, publish, or save it to a Slides server. Creating or revising a deck alone does not imply permission to make a network request.
+
+- Use the server URL and API token already available in the environment or conversation. If either is unavailable, ask the user for it instead of guessing.
+- Treat the API token as a secret. Send it only in the `Authorization: Bearer <token>` header, and never echo it in the response, command output, URLs, source, or logs.
+- Determine whether the target presentation already exists before writing. Use `GET /api/v1/presentations` to find a matching slug, or `GET /api/v1/presentations/{slug}` when the target slug is known.
+- Create a missing presentation with `POST /api/v1/presentations`. Update an existing presentation with `PATCH /api/v1/presentations/{slug}`; slugs are immutable.
+- Send the complete Slides Markdown document in the JSON `source` field. Include `title`, and optionally `slug` and `theme`, when creating. Include only fields that should change when updating, but never send a partial Markdown fragment as `source`.
+- Handle non-success responses without exposing credentials. Report the server's safe error message and ask for whatever action is needed.
+- After a successful upload, return a concise confirmation with the audience presentation URL (`<server-url>/<slug>`). Do not also print the raw Markdown unless the user explicitly asks for both.
+
 ## Output contract
 
-Return only the complete raw Slides Markdown document. Do not introduce it, explain it, summarize it, wrap it in a Markdown code fence, or append commentary. The first character of the response must belong to the first slide. This output rule applies even when the user asks for a revision.
+Unless this is an explicit upload request, return only the complete raw Slides Markdown document. Do not introduce it, explain it, summarize it, wrap it in a Markdown code fence, or append commentary. The first character of the response must belong to the first slide. This output rule applies even when the user asks for a revision.
+
+For an explicit upload request, upload the deck instead. On success, return only a concise confirmation and the presentation URL rather than the raw Markdown.

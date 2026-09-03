@@ -13,6 +13,7 @@ The current vertical slice supports:
 - Live horizontal and vertical result charts over Server-Sent Events
 - Responsive presenter and audience views
 - Structured font and color themes
+- A bearer-authenticated JSON API for creating, reading, updating, and deleting presentations
 
 ## Run it
 
@@ -40,6 +41,20 @@ Configuration:
 - `SLIDES_HEALTHCHECK_URL`: Docker health-check URL; override it when changing the container's `SLIDES_BIND` port
 
 `GET /healthz` returns `200 OK` when the process can query SQLite and `503 Service Unavailable` otherwise.
+
+## Presentation API
+
+Sign in as the presenter and open `/admin/settings` to generate the workspace API token and view request examples. The plaintext token is shown only when generated; Slides stores only its SHA-256 hash. Regenerating or revoking it invalidates the previous token immediately.
+
+All API requests use `Authorization: Bearer <token>`. The versioned endpoints are:
+
+- `GET /api/v1/presentations`
+- `POST /api/v1/presentations`
+- `GET /api/v1/presentations/{slug}`
+- `PATCH /api/v1/presentations/{slug}`
+- `DELETE /api/v1/presentations/{slug}`
+
+Create and source-update requests validate the Slides Markdown before saving it. Request bodies are limited to 2 MiB, and API errors use a JSON `error.code` plus `error.message` shape. Full examples and the request schema are available on the settings page.
 
 Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 
@@ -85,7 +100,7 @@ SQLx verifies applied migrations by checksum. Once a migration has been run anyw
 
 The normative format specification and research notes are in [`docs/slide-format.md`](docs/slide-format.md). A complete, ready-to-present showcase is available at [`examples/kitchen-sink.md`](examples/kitchen-sink.md).
 
-Decks use `---` separators, CommonMark content, fenced code blocks, optional `:::notes` presenter notes, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+Decks use `---` separators, CommonMark content, fenced code blocks, Mermaid diagrams, optional `:::notes` presenter notes, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
 
 Code shipped beside presentations under `examples/code/` can be included with an empty fence:
 
@@ -96,8 +111,17 @@ Code shipped beside presentations under `examples/code/` can be included with an
 
 Drafts read the file directly; publishing snapshots its contents into the immutable deck version.
 
+Fenced `mermaid` blocks render diagrams in previews, live sessions, print/PDF output, and offline archives:
+
+````markdown
+```mermaid
+flowchart LR
+    Draft --> Review --> Present
+```
+````
+
 Running a Rust code block sends that block's source through the Slides server to the public Rust Playground. The Slides container therefore needs outbound HTTPS access to `play.rust-lang.org`; the code runs in the Playground sandbox, not on the Slides host.
 
-HTMX 4.0.0 and its `hx-sse` extension are vendored under `assets/`; the app has no frontend build step. The files come from the official `htmx.org@4.0.0` jsDelivr package. Their SHA-256 checksums are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f` and `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, respectively.
+HTMX 4.0.0, its `hx-sse` extension, and Mermaid 11.17.2 are vendored under `assets/`; the app has no frontend build step. The files come from their official jsDelivr packages. The SHA-256 checksums for `htmx.min.js`, `hx-sse.min.js`, and `vendor/mermaid/mermaid.min.js` are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f`, `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, and `581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8`, respectively.
 
 Live updates use an in-process broadcast hub, so the current version must run as a single application process. SQLite remains the durable source of truth.

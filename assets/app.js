@@ -7,6 +7,9 @@
   let editorSplitPointer = null;
   let presenterNotesOpen = true;
   let presenterQuestionsOpen = false;
+  let mermaidDiagramId = 0;
+  let mermaidLoadPromise = null;
+  let mermaidRenderPromise = Promise.resolve();
 
   function rememberBars() {
     previousBarValues.clear();
@@ -402,6 +405,146 @@
     }
   }
 
+  async function copyElementValue(button) {
+    const target = document.getElementById(button.dataset.copyTarget);
+    const status = document.getElementById(button.dataset.copyStatus);
+    const value = target instanceof HTMLInputElement ? target.value : target?.textContent;
+    if (!value) return;
+    try {
+      await copyText(value);
+      if (status) status.textContent = "Token copied.";
+    } catch {
+      if (status) status.textContent = "Could not copy the token.";
+    }
+  }
+
+  function mermaidThemeVariables(diagram) {
+    const styles = window.getComputedStyle(diagram);
+    const color = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+    const background = color("--bg", "#1e1e2e");
+    const surface = color("--surface-raised", "#313244");
+    const text = color("--text", "#cdd6f4");
+    const softText = color("--text-soft", "#bac2de");
+    const accent = color("--highlight", "#f9e2af");
+    const border = color("--border-strong", "#585b70");
+
+    return {
+      background,
+      primaryColor: surface,
+      primaryTextColor: text,
+      primaryBorderColor: accent,
+      secondaryColor: background,
+      secondaryTextColor: text,
+      secondaryBorderColor: border,
+      tertiaryColor: surface,
+      tertiaryTextColor: text,
+      tertiaryBorderColor: border,
+      lineColor: softText,
+      textColor: text,
+      mainBkg: surface,
+      nodeBorder: accent,
+      clusterBkg: background,
+      clusterBorder: border,
+      edgeLabelBackground: background,
+      actorBkg: surface,
+      actorBorder: accent,
+      actorTextColor: text,
+      actorLineColor: softText,
+      signalColor: softText,
+      signalTextColor: text,
+      labelBoxBkgColor: surface,
+      labelBoxBorderColor: border,
+      labelTextColor: text,
+      loopTextColor: text,
+      noteBkgColor: surface,
+      noteBorderColor: accent,
+      noteTextColor: text,
+    };
+  }
+
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(true);
+    if (mermaidLoadPromise) return mermaidLoadPromise;
+
+    mermaidLoadPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "/assets/vendor/mermaid/mermaid.min.js";
+      script.onload = () => resolve(Boolean(window.mermaid));
+      script.onerror = () => resolve(false);
+      document.head.append(script);
+    });
+    return mermaidLoadPromise;
+  }
+
+  async function renderMermaidDiagrams(root) {
+    const diagrams = root.querySelectorAll(
+      "[data-mermaid-diagram]:not([data-mermaid-state])",
+    );
+    if (diagrams.length === 0) return;
+
+    if (!(await loadMermaid())) {
+      diagrams.forEach((diagram) => {
+        diagram.dataset.mermaidState = "error";
+        const error = diagram.querySelector("[data-mermaid-error]");
+        if (error) error.hidden = false;
+      });
+      return;
+    }
+
+    for (const diagram of diagrams) {
+      const source = diagram.querySelector("[data-mermaid-source]");
+      const output = diagram.querySelector("[data-mermaid-output]");
+      const error = diagram.querySelector("[data-mermaid-error]");
+      if (!source || !output || !error) continue;
+
+      diagram.dataset.mermaidState = "rendering";
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          maxTextSize: 50_000,
+          theme: "base",
+          themeVariables: mermaidThemeVariables(diagram),
+        });
+        mermaidDiagramId += 1;
+        // Keep reduced-motion overrides from changing Mermaid's layout measurements.
+        const sandbox = document.createElement("div");
+        sandbox.className = "mermaid-render-sandbox";
+        document.body.append(sandbox);
+
+        let result;
+        try {
+          result = await window.mermaid.render(
+            `slides-mermaid-${mermaidDiagramId}`,
+            source.textContent || "",
+            sandbox,
+          );
+        } finally {
+          sandbox.remove();
+        }
+
+        output.innerHTML = result.svg;
+        result.bindFunctions?.(output);
+        source.hidden = true;
+        error.hidden = true;
+        output.hidden = false;
+        diagram.dataset.mermaidState = "ready";
+      } catch (renderError) {
+        console.warn("Could not render Mermaid diagram", renderError);
+        output.replaceChildren();
+        output.hidden = true;
+        source.hidden = false;
+        error.hidden = false;
+        diagram.dataset.mermaidState = "error";
+      }
+    }
+  }
+
+  function initializeMermaidDiagrams(root = document) {
+    mermaidRenderPromise = mermaidRenderPromise.then(() => renderMermaidDiagrams(root));
+    return mermaidRenderPromise;
+  }
+
   function initializeRustPlaygrounds(root = document) {
     if (document.body.matches("[data-print-deck]")) return;
     root.querySelectorAll("[data-rust-code]:not([data-playground-ready])").forEach((block) => {
@@ -534,7 +677,22 @@
     focusTarget?.focus();
   }
 
+  function formatCreatedAt() {
+    document.querySelectorAll("[data-created-at]").forEach((element) => {
+      const timestamp = Number.parseInt(element.dataset.createdAt || "", 10);
+      if (Number.isNaN(timestamp)) return;
+      const createdAt = new Date(timestamp);
+      if (Number.isNaN(createdAt.getTime())) return;
+      element.dateTime = createdAt.toISOString();
+      element.textContent = `Created ${new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(createdAt)}`;
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
+    formatCreatedAt();
     initializeMarkdownEditor();
     animateBars();
     followPresenter();
@@ -544,13 +702,15 @@
     restoreEditorSplit();
     initializePresenterNotes();
     initializePresenterQuestions();
+    initializeMermaidDiagrams();
     initializeRustPlaygrounds();
   });
 
-  window.addEventListener("load", () => {
-    if (document.body.matches("[data-print-deck]")) {
-      window.setTimeout(() => window.print(), 100);
-    }
+  window.addEventListener("load", async () => {
+    if (!document.body.matches("[data-print-deck]")) return;
+    await initializeMermaidDiagrams();
+    await document.fonts?.ready;
+    window.setTimeout(() => window.print(), 100);
   });
 
   document.addEventListener("keydown", (event) => {
@@ -617,6 +777,11 @@
     const share = event.target.closest("[data-share-url]");
     if (share) {
       copyPresentationLink(share);
+      return;
+    }
+    const copyValue = event.target.closest("[data-copy-target]");
+    if (copyValue) {
+      copyElementValue(copyValue);
       return;
     }
     const playgroundRun = event.target.closest("[data-playground-run]");
@@ -739,6 +904,7 @@
     restorePreviewSlide();
     restorePresenterNotes();
     restorePresenterQuestions();
+    initializeMermaidDiagrams();
     initializeRustPlaygrounds();
   });
 })();

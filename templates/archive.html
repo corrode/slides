@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · Session archive</title>
   <link rel="stylesheet" href="assets/app.css">
+  {% if has_mermaid %}
+  <script src="/assets/vendor/mermaid/mermaid.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+  {% endif %}
 </head>
 <body class="archive-page" style="{{ theme_style }}">
   <header class="archive-toolbar">

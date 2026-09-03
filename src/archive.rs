@@ -22,6 +22,7 @@ struct ArchiveTemplate {
     title: String,
     theme_style: String,
     slides: String,
+    has_mermaid: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -251,6 +252,10 @@ pub async fn build(
         title: version.title.clone(),
         theme_style: Theme::from(version).style(),
         slides,
+        has_mermaid: document
+            .slides
+            .iter()
+            .any(|slide| slide.html.contains("data-mermaid-diagram")),
     }
     .render()?;
 
@@ -339,6 +344,11 @@ fn package(mut page: String, audience_json: Vec<u8>, asset_root: &Path) -> Resul
                 missing_assets.push(url);
             }
         }
+    }
+    if packaged_assets.contains_key("vendor/mermaid/mermaid.min.js") {
+        let license = std::fs::read(asset_root.join("vendor/mermaid/LICENSE"))
+            .context("could not read the Mermaid license for the session archive")?;
+        packaged_assets.insert("vendor/mermaid/LICENSE".into(), license);
     }
 
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -439,8 +449,20 @@ mod tests {
     fn packages_local_assets_and_rejects_traversal() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("app.css"), "body {}").unwrap();
+        std::fs::write(directory.path().join("app.js"), "renderDiagrams()").unwrap();
+        std::fs::create_dir_all(directory.path().join("vendor/mermaid")).unwrap();
+        std::fs::write(
+            directory.path().join("vendor/mermaid/mermaid.min.js"),
+            "window.mermaid = {}",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("vendor/mermaid/LICENSE"),
+            "MIT License",
+        )
+        .unwrap();
         std::fs::write(directory.path().join("cat.webp"), b"cat").unwrap();
-        let page = r#"<img src="/assets/cat.webp?v=2"><img src="/assets/missing.png"><img src="/assets/../secret">"#.into();
+        let page = r#"<script src="/assets/vendor/mermaid/mermaid.min.js"></script><script src="/assets/app.js"></script><img src="/assets/cat.webp?v=2"><img src="/assets/missing.png"><img src="/assets/../secret">"#.into();
 
         let archive = package(page, b"{}".to_vec(), directory.path()).unwrap();
         let index =
@@ -452,6 +474,22 @@ mod tests {
         assert_eq!(
             read_entry(&archive, "assets/cat.webp").unwrap().unwrap(),
             b"cat"
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/app.js").unwrap().unwrap(),
+            b"renderDiagrams()"
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/vendor/mermaid/mermaid.min.js")
+                .unwrap()
+                .unwrap(),
+            b"window.mermaid = {}"
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/vendor/mermaid/LICENSE")
+                .unwrap()
+                .unwrap(),
+            b"MIT License"
         );
         assert!(read_entry(&archive, "../secret").unwrap().is_none());
         assert!(

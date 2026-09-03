@@ -414,7 +414,9 @@ fn validate_title(title: &str) -> AppResult<()> {
 }
 
 fn validate_slug(slug: &str) -> AppResult<()> {
-    const RESERVED: &[&str] = &["admin", "assets", "healthz", "join", "present", "sessions"];
+    const RESERVED: &[&str] = &[
+        "admin", "api", "assets", "healthz", "join", "present", "sessions",
+    ];
     let valid = (1..=48).contains(&slug.len())
         && slug
             .bytes()
@@ -502,6 +504,7 @@ mod tests {
     fn route_names_are_not_valid_shortlinks() {
         assert!(validate_slug("healthz").is_err());
         assert!(validate_slug("admin").is_err());
+        assert!(validate_slug("api").is_err());
         assert!(validate_slug("my-healthz-talk").is_ok());
     }
 

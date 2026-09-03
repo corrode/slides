@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API settings · Slides</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body class="admin-page">
+  <header class="topbar admin-topbar">
+    <a class="brand" href="/admin">Slides</a>
+    <nav aria-label="Admin navigation">
+      <a class="button ghost small" href="/admin">Presentations</a>
+      <a class="button ghost small" href="/">Audience</a>
+    </nav>
+  </header>
+
+  <main class="admin-shell settings-shell">
+    <header class="admin-heading">
+      <p class="eyebrow">Workspace settings</p>
+      <h1>Presentation API</h1>
+      <p>Create and update Slides presentations from an LLM, script, or CI job.</p>
+    </header>
+
+    <div class="settings-grid">
+      <section class="panel api-token-panel" aria-labelledby="api-token-title">
+        <p class="eyebrow">Authentication</p>
+        <h2 id="api-token-title">API token</h2>
+        {% match revealed_token %}
+          {% when Some with (value) %}
+            <div class="notice" role="status">
+              <p><strong>Copy this token now.</strong> It cannot be shown again after you leave this page.</p>
+            </div>
+            <div class="api-token-copy">
+              <label for="api-token-value">New token</label>
+              <div>
+                <input id="api-token-value" value="{{ value }}" readonly spellcheck="false" autocomplete="off">
+                <button type="button" class="secondary" data-copy-target="api-token-value" data-copy-status="api-token-copy-status">Copy</button>
+              </div>
+              <small id="api-token-copy-status" role="status">Store it in a password manager or secret store.</small>
+            </div>
+          {% when None %}
+        {% endmatch %}
+
+        {% match token %}
+          {% when Some with (token) %}
+            <p class="api-token-state"><span class="status-pill success">Active</span> Token <code>{{ token.prefix }}</code></p>
+            <p><time data-created-at="{{ token.created_at }}">Creation time unavailable</time>. Only a SHA-256 hash is stored. Regenerating the token immediately invalidates the current one.</p>
+            <div class="settings-actions">
+              <form method="post" action="/admin/settings/api-token" data-confirm="Generate a new API token? The current token will stop working immediately.">
+                <button type="submit">Regenerate token</button>
+              </form>
+              <form method="post" action="/admin/settings/api-token/revoke" data-confirm="Revoke API access? Automated clients will stop working immediately.">
+                <button class="danger" type="submit">Revoke token</button>
+              </form>
+            </div>
+          {% when None %}
+            <p>No API token exists yet. Generate one to enable authenticated API access.</p>
+            <form method="post" action="/admin/settings/api-token">
+              <button type="submit">Generate API token</button>
+            </form>
+        {% endmatch %}
+      </section>
+
+      <section class="panel api-docs" aria-labelledby="api-docs-title">
+        <p class="eyebrow">API v1</p>
+        <h2 id="api-docs-title">Use the API</h2>
+        <p>Send the token as a bearer credential with every request:</p>
+        <pre><code>Authorization: Bearer &lt;token&gt;</code></pre>
+
+        <h3>Endpoints</h3>
+        <dl class="api-endpoints">
+          <div><dt><code>GET /api/v1/presentations</code></dt><dd>List presentations.</dd></div>
+          <div><dt><code>POST /api/v1/presentations</code></dt><dd>Create a presentation.</dd></div>
+          <div><dt><code>GET /api/v1/presentations/{slug}</code></dt><dd>Read a presentation and its Markdown source.</dd></div>
+          <div><dt><code>PATCH /api/v1/presentations/{slug}</code></dt><dd>Update its title, source, or theme. Slugs are immutable.</dd></div>
+          <div><dt><code>DELETE /api/v1/presentations/{slug}</code></dt><dd>Delete it unless a live session is active.</dd></div>
+        </dl>
+
+        <h3>Upload a presentation</h3>
+        <p>Save the generated deck as <code>presentation.json</code>:</p>
+        <pre><code>{
+  "title": "Reliable Rust services",
+  "slug": "reliable-rust-services",
+  "source": "# Reliable Rust services\n\nOne idea per slide.\n\n---\n\n# Start with failure modes",
+  "theme": {
+    "font": "system",
+    "background": "#1e1e2e",
+    "text": "#cdd6f4",
+    "accent": "#f9e2af"
+  }
+}</code></pre>
+        <pre><code>curl --fail-with-body \
+  --request POST \
+  --url "$SLIDES_URL/api/v1/presentations" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data @presentation.json</code></pre>
+        <p>The <code>slug</code> and <code>theme</code> fields are optional. If omitted, the server derives a unique slug and uses the default theme.</p>
+
+        <h3>Update Markdown</h3>
+        <pre><code>curl --fail-with-body \
+  --request PATCH \
+  --url "$SLIDES_URL/api/v1/presentations/reliable-rust-services" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"source":"# Revised deck\n\nUpdated content."}'</code></pre>
+        <p>Create and source updates validate Slides Markdown before saving. JSON errors include a stable <code>error.code</code> and human-readable <code>error.message</code>.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

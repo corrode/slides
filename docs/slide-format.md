@@ -58,7 +58,7 @@ The content parser supports CommonMark plus:
 - task lists;
 - fenced and indented code blocks.
 
-The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text. On interactive pages, fenced `rust` and `rs` blocks get a **Run** control. The server forwards that block's source to the stable Rust 2024 toolchain at `play.rust-lang.org`; code runs in the official Playground sandbox, never in the Slides process. Print/PDF output and offline session archives contain only the highlighted source.
+The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text. Fenced `mermaid` blocks render as diagrams as described below. On interactive pages, fenced `rust` and `rs` blocks get a **Run** control. The server forwards that block's source to the stable Rust 2024 toolchain at `play.rust-lang.org`; code runs in the official Playground sandbox, never in the Slides process. Print/PDF output and offline session archives contain highlighted code without the **Run** control.
 
 ### Referenced code files
 
@@ -72,6 +72,23 @@ Executable examples can live beside the presentations under `examples/code/` and
 The first token selects syntax highlighting. The second is a path relative to `examples/` and must remain inside `code/`; absolute paths, parent-directory traversal, symlink escapes, missing files, non-UTF-8 files, extra fence arguments, and fences that also contain inline code are rejected.
 
 Draft previews read the current file. Publishing expands references into ordinary inline code fences in the immutable version, so later file edits do not change an already published presentation.
+
+### Mermaid diagrams
+
+A fenced code block whose language is `mermaid` renders as a diagram:
+
+````markdown
+```mermaid
+flowchart LR
+    accTitle: Presentation workflow
+    accDescr: A draft is published, presented, and archived.
+    Draft --> Publish --> Present --> Archive
+```
+````
+
+Slides uses the vendored Mermaid 11.17.2 browser renderer in strict security mode. Diagrams work in editor previews, presenter and audience views, print/PDF output, and downloadable session archives. The original escaped source remains visible if JavaScript is unavailable or Mermaid rejects the diagram.
+
+Mermaid blocks may coexist with an interaction or notes block and do not count toward the one-interaction-per-slide limit. Keep diagrams compact enough for a 16:9 slide. Add Mermaid's `accTitle` and `accDescr` declarations so the generated SVG has an accessible name and description. Custom scripts and raw HTML are not supported.
 
 Raw HTML is escaped and displayed as text. It is never executed. Link and image destinations may use:
 

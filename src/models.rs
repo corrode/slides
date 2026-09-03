@@ -23,6 +23,12 @@ pub struct DeckSummary {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ApiTokenSummary {
+    pub prefix: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct EndedSessionSummary {
     pub title: String,
     pub code: String,

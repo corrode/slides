@@ -20,12 +20,13 @@
 - [x] Add Markdown presenter notes that are visible only in the live presenter view.
 - [x] Run Rust code blocks through the official Rust Playground sandbox.
 - [x] Add audience questions with upvotes, presenter moderation, and archive export.
-
-## TODO
-
-- [ ] this project has historically grown. there are a lot of inconsistencies
+- [x] this project has historically grown. there are a lot of inconsistencies
   across pages in the html and css and a lot of issues with the amount of
   javascript and the lack of leaning into htmx4 and the backend. do a one-over
   and streamline the UI as well as the code. we are not live yet, so you have
   free reign. Use exa search to look for design best practices and
   accessibility.
+
+## TODO
+
+- [ ] Add the ability to include local HTML pages as an iframe into the presentation.

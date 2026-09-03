@@ -10,8 +10,8 @@ use sqlx::{
 };
 
 use crate::models::{
-    DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck, DeckSummary,
-    DeckVersion, EndedSessionSummary, LiveSession,
+    ApiTokenSummary, DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck,
+    DeckSummary, DeckVersion, EndedSessionSummary, LiveSession,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -68,6 +68,52 @@ pub async fn healthcheck(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+pub async fn api_token(pool: &SqlitePool) -> Result<Option<ApiTokenSummary>> {
+    Ok(sqlx::query_as::<_, ApiTokenSummary>(
+        "SELECT prefix, created_at FROM api_token WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn replace_api_token(
+    pool: &SqlitePool,
+    token_hash: &str,
+    prefix: &str,
+) -> Result<ApiTokenSummary> {
+    Ok(sqlx::query_as::<_, ApiTokenSummary>(
+        r#"INSERT INTO api_token (id, token_hash, prefix, created_at)
+           VALUES (1, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+               token_hash = excluded.token_hash,
+               prefix = excluded.prefix,
+               created_at = excluded.created_at
+           RETURNING prefix, created_at"#,
+    )
+    .bind(token_hash)
+    .bind(prefix)
+    .bind(now_millis())
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn api_token_matches(pool: &SqlitePool, token_hash: &str) -> Result<bool> {
+    let matches: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM api_token WHERE id = 1 AND token_hash = ?)",
+    )
+    .bind(token_hash)
+    .fetch_one(pool)
+    .await?;
+    Ok(matches != 0)
+}
+
+pub async fn revoke_api_token(pool: &SqlitePool) -> Result<bool> {
+    let deleted = sqlx::query("DELETE FROM api_token WHERE id = 1")
+        .execute(pool)
+        .await?;
+    Ok(deleted.rows_affected() > 0)
+}
+
 pub async fn list_decks(pool: &SqlitePool) -> Result<Vec<DeckSummary>> {
     Ok(sqlx::query_as::<_, DeckSummary>(
         r#"
@@ -96,30 +142,57 @@ pub async fn list_ended_sessions(pool: &SqlitePool) -> Result<Vec<EndedSessionSu
 }
 
 pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<Deck> {
-    let now = now_millis();
     let source = format!(
         "# {title}\n\nYour presentation starts here.\n\n---\n\n# Ask the audience\n\n:::poll question=\"Which option do you prefer?\"\n- The first option\n- The second option\n:::"
     );
-    let id = sqlx::query(
+    create_deck_with_content(
+        pool,
+        slug,
+        title,
+        &source,
+        "system",
+        DEFAULT_THEME_BACKGROUND,
+        DEFAULT_THEME_TEXT,
+        DEFAULT_THEME_ACCENT,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_deck_with_content(
+    pool: &SqlitePool,
+    slug: &str,
+    title: &str,
+    source: &str,
+    font: &str,
+    background: &str,
+    text: &str,
+    accent: &str,
+) -> Result<Deck> {
+    let now = now_millis();
+    Ok(sqlx::query_as::<_, Deck>(
         r#"INSERT INTO decks
-           (slug, title, draft_source, theme_background, theme_text, theme_accent, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (slug, title, draft_source, theme_font, theme_background, theme_text,
+            theme_accent, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           RETURNING id, slug, title, draft_source, theme_font, theme_background,
+                     theme_text, theme_accent"#,
     )
     .bind(slug)
     .bind(title)
     .bind(source)
-    .bind(DEFAULT_THEME_BACKGROUND)
-    .bind(DEFAULT_THEME_TEXT)
-    .bind(DEFAULT_THEME_ACCENT)
+    .bind(font)
+    .bind(background)
+    .bind(text)
+    .bind(accent)
     .bind(now)
     .bind(now)
-    .execute(pool)
-    .await?
-    .last_insert_rowid();
-    get_deck(pool, id).await
+    .fetch_one(pool)
+    .await?)
 }
 
-pub async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
+#[cfg(test)]
+async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
     Ok(sqlx::query_as::<_, Deck>(
         r#"SELECT id, slug, title, draft_source, theme_font, theme_background,
                   theme_text, theme_accent
@@ -925,6 +998,70 @@ mod tests {
         .await
         .unwrap();
         start_session(pool, deck.id, version_id).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn replaces_and_revokes_api_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+        let old_hash = "a".repeat(64);
+        let new_hash = "b".repeat(64);
+
+        let created = replace_api_token(&pool, &old_hash, "slides_old")
+            .await
+            .unwrap();
+        assert_eq!(created.prefix, "slides_old");
+        assert!(created.created_at > 0);
+        assert!(api_token_matches(&pool, &old_hash).await.unwrap());
+
+        let replaced = replace_api_token(&pool, &new_hash, "slides_new")
+            .await
+            .unwrap();
+        assert_eq!(replaced.prefix, "slides_new");
+        assert!(!api_token_matches(&pool, &old_hash).await.unwrap());
+        assert!(api_token_matches(&pool, &new_hash).await.unwrap());
+
+        let summary = api_token(&pool).await.unwrap().unwrap();
+        assert_eq!(summary.prefix, "slides_new");
+        assert_eq!(summary.created_at, replaced.created_at);
+
+        assert!(revoke_api_token(&pool).await.unwrap());
+        assert!(!revoke_api_token(&pool).await.unwrap());
+        assert!(api_token(&pool).await.unwrap().is_none());
+        assert!(!api_token_matches(&pool, &new_hash).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn creates_deck_with_full_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+
+        let created = create_deck_with_content(
+            &pool,
+            "custom-deck",
+            "Custom Deck",
+            "# Custom source\n\nWith full content.",
+            "mono",
+            "#010203",
+            "#fefefe",
+            "#abcdef",
+        )
+        .await
+        .unwrap();
+        let persisted = get_deck(&pool, created.id).await.unwrap();
+
+        assert_eq!(persisted.slug, "custom-deck");
+        assert_eq!(persisted.title, "Custom Deck");
+        assert_eq!(
+            persisted.draft_source,
+            "# Custom source\n\nWith full content."
+        );
+        assert_eq!(persisted.theme_font, "mono");
+        assert_eq!(persisted.theme_background, "#010203");
+        assert_eq!(persisted.theme_text, "#fefefe");
+        assert_eq!(persisted.theme_accent, "#abcdef");
     }
 
     #[tokio::test]
