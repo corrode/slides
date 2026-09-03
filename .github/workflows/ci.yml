@@ -154,11 +154,11 @@ jobs:
 
           storages="$(api_get "/applications/${COOLIFY_RESOURCE_UUID}/storages")"
           if jq --exit-status \
-            'any(.[]; .mount_path == "/app/data")' \
+            'any(.. | objects; .mount_path? == "/app/data")' \
             <<<"${storages}" >/dev/null; then
             echo "Persistent storage is mounted at /app/data."
           elif jq --exit-status \
-            'any(.[]; .name == "slides-data")' \
+            'any(.. | objects; .name? == "slides-data")' \
             <<<"${storages}" >/dev/null; then
             echo "The slides-data volume exists but is not mounted at /app/data." >&2
             exit 1
