@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/login", get(admin::login_page).post(admin::login))
         .route("/admin", get(admin::dashboard))
         .route("/admin/decks", post(admin::create_deck))
+        .route("/admin/decks/{slug}/delete", post(admin::delete_deck))
         .route("/admin/decks/{slug}/edit", get(admin::editor))
         .route("/admin/decks/{slug}/save", post(admin::save))
         .route("/admin/decks/{slug}/print", post(admin::print_deck))
@@ -76,9 +77,14 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sessions/{code}/react/{kind}", post(session::react))
         .route("/sessions/{code}/end", post(session::end))
+        .route("/admin/sessions/{code}/ended", get(session::ended))
         .route(
             "/admin/sessions/{code}/artifact",
             post(session::create_artifact),
+        )
+        .route(
+            "/admin/sessions/{code}/delete",
+            post(admin::delete_ended_session),
         )
         .route("/shared/{token}", get(shared::redirect_to_archive))
         .route("/shared/{token}/", get(shared::archive_page))

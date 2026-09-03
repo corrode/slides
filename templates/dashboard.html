@@ -6,6 +6,7 @@
   <title>Your presentations · Slides</title>
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
 </head>
 <body class="admin-page">
   <header class="topbar admin-topbar">
@@ -33,7 +34,7 @@
         </button>
       </li>
       {% for deck in decks %}
-      <li>
+      <li class="presentation-card-item">
         <a class="presentation-card" href="/admin/decks/{{ deck.slug }}/edit">
           <span class="presentation-preview" aria-hidden="true">
             <span class="presentation-preview-kicker">Presentation</span>
@@ -56,6 +57,14 @@
             </span>
           </span>
         </a>
+        {% match deck.active_code %}
+          {% when Some with (code) %}
+            <button class="presentation-delete-button danger small icon-only" type="button" disabled aria-label="End live session {{ code }} before deleting {{ deck.title }}" title="End the live session before deleting this presentation"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6"/></svg></button>
+          {% when None %}
+            <form class="presentation-delete-form" method="post" action="/admin/decks/{{ deck.slug }}/delete" data-confirm="Delete “{{ deck.title }}” and all of its published versions, sessions, responses, and archives? This cannot be undone.">
+              <button class="presentation-delete-button danger small icon-only" type="submit" aria-label="Delete {{ deck.title }}" title="Delete presentation"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6"/></svg></button>
+            </form>
+        {% endmatch %}
       </li>
       {% endfor %}
     </ul>
@@ -79,8 +88,11 @@
                 <a class="button secondary small" href="/shared/{{ token }}/">Open archive</a>
                 <a class="button ghost small" href="/shared/{{ token }}/download">Download ZIP</a>
               {% when None %}
-                <form method="post" action="/admin/sessions/{{ session.code }}/artifact"><button class="secondary small" type="submit">Create archive</button></form>
+                <form class="inline-form" method="post" action="/admin/sessions/{{ session.code }}/artifact"><button class="secondary small" type="submit">Create archive</button></form>
             {% endmatch %}
+            <form class="inline-form" method="post" action="/admin/sessions/{{ session.code }}/delete" data-confirm="Delete ended session {{ session.code }} and all of its responses and archive data? This cannot be undone.">
+              <button class="danger small" type="submit">Delete</button>
+            </form>
           </div>
         </li>
         {% endfor %}

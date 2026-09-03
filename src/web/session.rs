@@ -48,6 +48,14 @@ struct PresenterTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "session-ended.html")]
+struct SessionEndedTemplate {
+    title: String,
+    slug: String,
+    share_token: String,
+}
+
+#[derive(Template)]
 #[template(path = "audience.html")]
 struct AudienceTemplate {
     title: String,
@@ -660,9 +668,29 @@ pub async fn end(
     let runtime = state.hub.runtime(session.id).await;
     let _guard = runtime.mutation.lock().await;
     let session = store::get_session(&state.pool, session.id).await?;
-    let token = ensure_session_artifact(&state, &session).await?;
+    ensure_session_artifact(&state, &session).await?;
     state.hub.finish(session.id).await;
-    Ok(Redirect::to(&format!("/shared/{token}/")).into_response())
+    Ok(Redirect::to(&format!("/admin/sessions/{code}/ended")).into_response())
+}
+
+pub async fn ended(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = required_session(&state, &code).await?;
+    if session.ended_at.is_none() {
+        return Err(AppError::bad_request("This presentation is still live."));
+    }
+    let artifact = store::artifact_for_session(&state.pool, session.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Session archive not found."))?;
+    template(SessionEndedTemplate {
+        title: artifact.title,
+        slug: store::deck_slug_for_session(&state.pool, session.id).await?,
+        share_token: artifact.share_token,
+    })
 }
 
 pub async fn create_artifact(
@@ -860,7 +888,9 @@ fn historical_slide(
 
 #[cfg(test)]
 mod tests {
-    use super::{historical_slide, valid_ordering};
+    use askama::Template;
+
+    use super::{SessionEndedTemplate, historical_slide, valid_ordering};
 
     #[test]
     fn historical_slide_expires_when_the_presenter_moves_or_requests_attention() {
@@ -868,6 +898,21 @@ mod tests {
         assert_eq!(historical_slide(Some(1), Some(2), Some(4), 3, 4), None);
         assert_eq!(historical_slide(Some(1), Some(2), Some(4), 2, 5), None);
         assert_eq!(historical_slide(Some(1), None, None, 2, 4), None);
+    }
+
+    #[test]
+    fn ended_session_links_to_editor_overview_and_archive() {
+        let html = SessionEndedTemplate {
+            title: "Intro to Rust".into(),
+            slug: "intro-to-rust".into(),
+            share_token: "a".repeat(64),
+        }
+        .render()
+        .unwrap();
+
+        assert!(html.contains("/admin/decks/intro-to-rust/edit"));
+        assert!(html.contains("href=\"/admin\""));
+        assert!(html.contains(&format!("/shared/{}/", "a".repeat(64))));
     }
 
     #[test]

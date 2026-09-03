@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · Session ended</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/admin">Slides</a></header>
+  <main class="shell">
+    <section class="interaction session-ended-state">
+      <p class="status-pill success">Session ended</p>
+      <h1>Presentation complete.</h1>
+      <p>The session archive is ready. You can continue editing this presentation or return to the overview.</p>
+      <nav class="session-ended-actions" aria-label="Session actions">
+        <a class="button" href="/admin/decks/{{ slug }}/edit">Back to editor</a>
+        <a class="button secondary" href="/admin">Presentation overview</a>
+        <a class="button ghost" href="/shared/{{ share_token }}/">View session archive</a>
+      </nav>
+    </section>
+  </main>
+</body>
+</html>

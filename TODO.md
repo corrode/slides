@@ -23,12 +23,9 @@
 
 ## TODO
 
-
 - [ ] this project has historically grown. there are a lot of inconsistencies
   across pages in the html and css and a lot of issues with the amount of
   javascript and the lack of leaning into htmx4 and the backend. do a one-over
   and streamline the UI as well as the code. we are not live yet, so you have
   free reign. Use exa search to look for design best practices and
   accessibility.
-
-- [ ] the design should be polished by using a proper but minimal CSS framework. I used pure.css before, but it's a bit too simplistic for this. I like shadcn, but it's too heavy. Make some suggestions before starting on that.

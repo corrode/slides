@@ -41,10 +41,12 @@
   --syntax-type: #f9e2af;
   --syntax-variable: #cdd6f4;
 
-  --radius-sm: 0.45rem;
-  --radius-md: 0.65rem;
-  --radius-lg: 0.85rem;
-  --radius-xl: 1rem;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-full: 999px;
 
   --content-width: 78rem;
   --topbar-height: 4.25rem;
@@ -210,7 +212,7 @@ button,
 .brand::before {
   width: 0.82rem;
   height: 0.82rem;
-  border-radius: 0.24rem;
+  border-radius: var(--radius-xs);
   background: var(--highlight);
   content: "";
 }
@@ -243,6 +245,24 @@ button,
 
 .waiting-state {
   text-align: center;
+}
+
+.session-ended-state {
+  width: min(100%, 42rem);
+  margin-inline: auto;
+  text-align: center;
+}
+
+.session-ended-state > p:not(.status-pill) {
+  color: var(--text-soft);
+}
+
+.session-ended-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
 }
 
 .admin-page {
@@ -293,6 +313,7 @@ button,
 }
 
 .presentation-grid > li {
+  position: relative;
   min-width: 0;
 }
 
@@ -350,6 +371,7 @@ button,
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: none;
   color: var(--text);
   text-align: left;
   text-decoration: none;
@@ -359,8 +381,8 @@ button,
 .presentation-card:focus-visible,
 .new-presentation-card:hover:not(:disabled),
 .new-presentation-card:focus-visible {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
+  border-color: var(--accent);
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -435,7 +457,23 @@ button,
   color: var(--highlight);
 }
 
+.presentation-delete-form {
+  display: block;
+}
+
+.presentation-delete-button {
+  position: absolute;
+  z-index: 2;
+  top: 0.75rem;
+  right: 0.75rem;
+  backdrop-filter: blur(8px);
+}
+
 .new-presentation-card {
+  --button-active-background: var(--surface-raised);
+  --button-active-border: var(--accent);
+  --button-active-color: var(--text);
+
   align-items: center;
   justify-content: center;
   gap: 1rem;
@@ -511,7 +549,7 @@ button,
   width: 2.4rem;
   min-height: 2.4rem;
   padding: 0;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   font-size: 1.4rem;
 }
 
@@ -566,14 +604,14 @@ textarea {
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--muted);
+  color: var(--muted-strong);
 }
 
 input:hover,
 textarea:hover,
 select:hover {
   border-color: var(--border-strong);
-  background: var(--surface-hover);
+  background: var(--surface-raised);
 }
 
 input:focus-visible,
@@ -595,73 +633,94 @@ button:disabled {
 
 button,
 .button {
+  --button-background: var(--accent);
+  --button-border: color-mix(in srgb, var(--accent) 72%, white);
+  --button-color: #11111b;
+  --button-hover-background: color-mix(in srgb, var(--accent) 88%, white);
+  --button-hover-border: color-mix(in srgb, var(--accent) 60%, white);
+  --button-hover-color: #11111b;
+  --button-active-background: var(--accent-deep);
+  --button-active-border: var(--accent-deep);
+  --button-active-color: #11111b;
+  --button-shadow: 0 1px 2px rgb(0 0 0 / 24%), inset 0 1px rgb(255 255 255 / 16%);
+
   display: inline-flex;
   min-height: 2.75rem;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.64rem 1rem;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #11111b;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius-md);
+  background: var(--button-background);
+  box-shadow: var(--button-shadow);
+  color: var(--button-color);
   cursor: pointer;
-  font-weight: 750;
+  font-weight: 700;
   line-height: 1.1;
   text-align: center;
   text-decoration: none;
+  transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
 }
 
 button:hover:not(:disabled),
 .button:hover:not([aria-disabled="true"]) {
-  border-color: transparent;
-  color: #11111b;
+  border-color: var(--button-hover-border);
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
 }
 
 button:active:not(:disabled),
 .button:active:not([aria-disabled="true"]) {
-  background: var(--accent-deep);
+  border-color: var(--button-active-border);
+  background: var(--button-active-background);
+  box-shadow: none;
+  color: var(--button-active-color);
 }
 
 .button.secondary,
 .button-secondary,
 button.secondary {
-  border-color: transparent;
-  background: var(--surface-soft);
-  color: var(--text);
-}
-
-.button.secondary:hover,
-.button-secondary:hover,
-button.secondary:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--surface-hover);
-  color: var(--text);
+  --button-background: var(--surface-raised);
+  --button-border: var(--border-strong);
+  --button-color: var(--text);
+  --button-hover-background: var(--surface-soft);
+  --button-hover-border: color-mix(in srgb, var(--border-strong) 70%, var(--text-soft));
+  --button-hover-color: var(--text);
+  --button-active-background: var(--surface-hover);
+  --button-active-border: var(--border-strong);
+  --button-active-color: var(--text);
+  --button-shadow: 0 1px 2px rgb(0 0 0 / 18%);
 }
 
 .button.ghost,
 .button-ghost,
 button.ghost {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted-strong);
-}
-
-.button.ghost:hover,
-.button-ghost:hover,
-button.ghost:hover:not(:disabled) {
-  background: rgb(255 255 255 / 6%);
-  color: var(--text);
+  --button-background: transparent;
+  --button-border: transparent;
+  --button-color: var(--muted-strong);
+  --button-hover-background: var(--surface-raised);
+  --button-hover-border: var(--border);
+  --button-hover-color: var(--text);
+  --button-active-background: var(--surface-soft);
+  --button-active-border: var(--border-strong);
+  --button-active-color: var(--text);
+  --button-shadow: none;
 }
 
 .button.danger,
 .button-danger,
 button.danger {
-  border-color: transparent;
-  background: var(--danger-soft);
-  box-shadow: none;
-  color: var(--danger);
+  --button-background: var(--danger-soft);
+  --button-border: color-mix(in srgb, var(--danger) 42%, transparent);
+  --button-color: var(--danger);
+  --button-hover-background: color-mix(in srgb, var(--danger) 22%, transparent);
+  --button-hover-border: var(--danger);
+  --button-hover-color: var(--danger);
+  --button-active-background: color-mix(in srgb, var(--danger) 32%, transparent);
+  --button-active-border: var(--danger);
+  --button-active-color: var(--danger);
+  --button-shadow: none;
 }
 
 .button.small,
@@ -745,9 +804,14 @@ button.small {
 }
 
 .editor-shell {
-  width: calc(100% - 1rem);
+  display: grid;
+  width: 100%;
   max-width: none;
-  padding-block: calc(var(--topbar-height) + 0.5rem) 0.5rem;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0;
+  padding-block: var(--topbar-height) 0;
+  grid-template-rows: 2.5rem minmax(0, 1fr);
 }
 
 .save-feedback {
@@ -776,11 +840,9 @@ button.small {
   --editor-pane-width: 42%;
 
   display: grid;
-  height: calc(100dvh - var(--topbar-height) - 3rem);
-  min-height: 32rem;
+  height: auto;
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
   background: var(--surface);
   grid-template-columns: minmax(18rem, var(--editor-pane-width)) 0.75rem minmax(0, 1fr);
 }
@@ -794,7 +856,8 @@ button.small {
 
 .editor-pane {
   display: grid;
-  padding: 0.75rem;
+  padding: 0;
+  background: var(--bg-deep);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -802,7 +865,8 @@ button.small {
   min-height: 2.5rem;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0 0.25rem 0.65rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.78rem;
   letter-spacing: 0.04em;
@@ -823,6 +887,9 @@ button.small {
   height: 100%;
   min-height: 26rem;
   resize: none;
+  padding: 1rem 1.25rem;
+  border: 0;
+  border-radius: 0;
   background: var(--bg-deep);
   font-family: var(--font-mono);
   font-size: 0.9rem;
@@ -834,8 +901,8 @@ button.small {
   width: 100%;
   height: 100%;
   min-height: 26rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: 0;
   background: var(--bg-deep);
   color: var(--text);
   font-family: var(--font-mono);
@@ -843,9 +910,8 @@ button.small {
   line-height: 1.65;
 }
 
-.editor-pane .CodeMirror-focused {
-  border-color: var(--highlight);
-  box-shadow: 0 0 0 1px var(--highlight);
+.editor-pane .CodeMirror-lines {
+  padding-block: 1rem 2rem;
 }
 
 .editor-pane .CodeMirror-gutters {
@@ -854,6 +920,7 @@ button.small {
 }
 
 .editor-pane .CodeMirror-linenumber {
+  padding-inline: 1rem 0.75rem;
   color: var(--muted);
 }
 
@@ -864,7 +931,7 @@ button.small {
   max-width: none;
   overflow: visible;
   margin: 0;
-  padding: 0 4px;
+  padding: 0 1rem;
   border: 0;
   border-radius: 0;
   background: transparent !important;
@@ -928,7 +995,7 @@ button.small {
 
 .preview-pane {
   display: grid;
-  padding: 0.75rem;
+  padding: 0;
   background: var(--surface);
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -936,7 +1003,8 @@ button.small {
 .preview-content {
   display: grid;
   min-height: 0;
-  place-items: center;
+  align-items: center;
+  padding: 1rem;
 }
 
 .theme-fields {
@@ -1145,7 +1213,7 @@ button.small {
 
 .archive-reactions > span {
   padding: 0.3em 0.6em;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-raised);
 }
 
@@ -1196,7 +1264,7 @@ button.small {
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: clamp(0.45rem, 1vw, 1rem);
+  border-radius: var(--radius-lg);
   background: var(--bg);
 }
 
@@ -1360,7 +1428,7 @@ pre {
 
 code {
   padding: 0.12em 0.34em;
-  border-radius: 0.3em;
+  border-radius: var(--radius-xs);
   background: #11111b;
   color: var(--highlight);
   font-size: 0.9em;
@@ -1769,6 +1837,17 @@ pre code {
 }
 
 .question-vote {
+  --button-background: var(--surface);
+  --button-border: var(--border);
+  --button-color: var(--muted-strong);
+  --button-hover-background: var(--surface-soft);
+  --button-hover-border: var(--border-strong);
+  --button-hover-color: var(--text);
+  --button-active-background: var(--surface-hover);
+  --button-active-border: var(--border-strong);
+  --button-active-color: var(--text);
+  --button-shadow: none;
+
   display: inline-flex;
   width: auto;
   min-width: 3.3rem;
@@ -1776,13 +1855,14 @@ pre code {
   flex: 0 0 auto;
   gap: 0.35rem;
   padding: 0.4rem 0.65rem;
-  background: var(--surface);
-  color: var(--muted-strong);
 }
 
 .question-vote.upvoted {
-  border-color: var(--highlight);
-  color: var(--highlight);
+  --button-border: var(--highlight);
+  --button-color: var(--highlight);
+  --button-hover-border: var(--highlight);
+  --button-hover-color: var(--highlight);
+  --button-active-color: var(--highlight);
 }
 
 .question-empty {
@@ -1871,7 +1951,7 @@ pre code {
   overflow-x: auto;
   padding: 0.4rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: blur(14px);
   flex-wrap: nowrap;
@@ -1904,6 +1984,10 @@ pre code {
 
 .hand-button.raised,
 .hand-button.raised:hover:not(:disabled) {
+  --button-active-background: var(--highlight);
+  --button-active-border: var(--highlight);
+  --button-active-color: #11111b;
+
   border-color: var(--highlight);
   background: var(--highlight);
   color: #11111b;
@@ -1953,6 +2037,10 @@ pre code {
 }
 
 .choice {
+  --button-active-background: var(--surface-soft);
+  --button-active-border: var(--border-strong);
+  --button-active-color: var(--text);
+
   display: flex;
   width: 100%;
   min-height: 4.2rem;
@@ -1963,6 +2051,7 @@ pre code {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: none;
   color: var(--text);
   cursor: pointer;
   font-weight: 650;
@@ -1976,13 +2065,13 @@ pre code {
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   content: "";
 }
 
 .choice:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
   color: var(--text);
 }
 
@@ -2070,7 +2159,7 @@ pre code {
   width: 1.7rem;
   height: 1.7rem;
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--surface-soft);
   color: var(--muted-strong);
   content: counter(ordering-card);
@@ -2139,7 +2228,7 @@ pre code {
   position: relative;
   height: 0.8rem;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-soft);
 }
 
@@ -2170,7 +2259,7 @@ pre code {
   width: clamp(2.2rem, 8vw, 5rem);
   height: var(--value, 0%);
   min-height: 0.25rem;
-  border-radius: 0.35rem 0.35rem 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: var(--highlight);
   transform-origin: center bottom;
   transition: height 750ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -2241,7 +2330,7 @@ pre code {
   gap: 0.35rem;
   padding: 0.35rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   transform: translateX(50%);
 }
@@ -2259,17 +2348,15 @@ pre code {
 }
 
 .attention-control {
-  background: var(--highlight);
-  color: #11111b;
-}
-
-.attention-control:hover:not(:disabled) {
-  background: #fab387;
-  color: #11111b;
-}
-
-.attention-control:active:not(:disabled) {
-  background: #eba0ac;
+  --button-background: var(--highlight);
+  --button-border: color-mix(in srgb, var(--highlight) 70%, white);
+  --button-color: #11111b;
+  --button-hover-background: #fab387;
+  --button-hover-border: #fab387;
+  --button-hover-color: #11111b;
+  --button-active-background: #eba0ac;
+  --button-active-border: #eba0ac;
+  --button-active-color: #11111b;
 }
 
 .question-signal {
@@ -2280,8 +2367,16 @@ pre code {
 }
 
 .question-signal button {
-  background: var(--danger-soft);
-  color: var(--danger);
+  --button-background: var(--danger-soft);
+  --button-border: color-mix(in srgb, var(--danger) 42%, transparent);
+  --button-color: var(--danger);
+  --button-hover-background: color-mix(in srgb, var(--danger) 22%, transparent);
+  --button-hover-border: var(--danger);
+  --button-hover-color: var(--danger);
+  --button-active-background: color-mix(in srgb, var(--danger) 32%, transparent);
+  --button-active-border: var(--danger);
+  --button-active-color: var(--danger);
+  --button-shadow: none;
 }
 
 .reaction-feed {
@@ -2353,16 +2448,17 @@ pre code {
   gap: 0.35rem;
   padding: 0.55rem 0.75rem;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-raised);
+  box-shadow: none;
   color: var(--text);
   cursor: pointer;
   font-size: 1.3rem;
 }
 
 .reaction:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
   color: var(--text);
 }
 
@@ -2380,13 +2476,19 @@ pre code {
   font-weight: 750;
 }
 
+.reaction:hover .count,
+.reaction:active .count,
+.reaction.active .count {
+  color: var(--text);
+}
+
 .status-pill {
   display: inline-flex;
   min-height: 1.8rem;
   align-items: center;
   gap: 0.42rem;
   padding: 0.24rem 0.65rem;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted-strong);
   font-size: 0.78rem;
@@ -2398,7 +2500,7 @@ pre code {
 .status-pill::before {
   width: 0.5rem;
   height: 0.5rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: currentColor;
   content: "";
 }
@@ -2459,7 +2561,7 @@ pre code {
 .empty-state::before {
   width: 3rem;
   height: 3rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--highlight);
   content: "";
 }
@@ -2544,6 +2646,12 @@ pre code {
     display: none;
   }
 
+  .editor-shell {
+    display: block;
+    height: auto;
+    min-height: 100vh;
+  }
+
   .editor-layout {
     height: auto;
     min-height: auto;
@@ -2560,7 +2668,7 @@ pre code {
   }
 
   .editor-pane {
-    padding: 1rem;
+    padding: 0;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
@@ -2587,6 +2695,12 @@ pre code {
     width: min(100% - 1rem, var(--content-width));
     padding-top: calc(var(--topbar-height) + 1rem);
     padding-bottom: 1.5rem;
+  }
+
+  .editor-shell {
+    width: 100%;
+    padding-top: var(--topbar-height);
+    padding-bottom: 0;
   }
 
   .admin-shell {
@@ -2656,9 +2770,21 @@ pre code {
     grid-template-columns: 1fr;
   }
 
+  .session-ended-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .session-ended-actions .button {
+    width: 100%;
+  }
+
   .preview-pane {
     min-height: 15rem;
-    padding: 0.5rem;
+  }
+
+  .preview-content {
+    padding: 0.75rem;
   }
 
   .editor-title-input {

@@ -106,6 +106,41 @@ pub async fn dashboard(State(state): State<AppState>, jar: CookieJar) -> AppResu
     })
 }
 
+pub async fn delete_deck(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(slug): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let deck = required_deck(&state, &slug).await?;
+    if !store::delete_deck(&state.pool, deck.id).await? {
+        return Err(AppError::bad_request(
+            "End the live session before deleting this presentation.",
+        ));
+    }
+    Ok(Redirect::to("/admin").into_response())
+}
+
+pub async fn delete_ended_session(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    let session = store::session_by_code(&state.pool, &code)
+        .await?
+        .ok_or_else(|| AppError::not_found("Session not found."))?;
+    if session.ended_at.is_none() {
+        return Err(AppError::bad_request(
+            "End the live session before deleting it.",
+        ));
+    }
+    if !store::delete_ended_session(&state.pool, session.id).await? {
+        return Err(AppError::not_found("Session not found."));
+    }
+    Ok(Redirect::to("/admin").into_response())
+}
+
 pub async fn create_deck(
     State(state): State<AppState>,
     jar: CookieJar,

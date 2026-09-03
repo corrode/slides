@@ -337,6 +337,42 @@ pub async fn get_session(pool: &SqlitePool, id: i64) -> Result<LiveSession> {
     .await?)
 }
 
+pub async fn deck_slug_for_session(pool: &SqlitePool, session_id: i64) -> Result<String> {
+    Ok(sqlx::query_scalar(
+        r#"SELECT d.slug
+           FROM decks d
+           JOIN sessions s ON s.deck_id = d.id
+           WHERE s.id = ?"#,
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn delete_deck(pool: &SqlitePool, deck_id: i64) -> Result<bool> {
+    let deleted = sqlx::query(
+        r#"DELETE FROM decks
+           WHERE id = ?
+             AND NOT EXISTS (
+                 SELECT 1 FROM sessions
+                 WHERE deck_id = ? AND ended_at IS NULL
+             )"#,
+    )
+    .bind(deck_id)
+    .bind(deck_id)
+    .execute(pool)
+    .await?;
+    Ok(deleted.rows_affected() > 0)
+}
+
+pub async fn delete_ended_session(pool: &SqlitePool, session_id: i64) -> Result<bool> {
+    let deleted = sqlx::query("DELETE FROM sessions WHERE id = ? AND ended_at IS NOT NULL")
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(deleted.rows_affected() > 0)
+}
+
 pub async fn move_to_slide(pool: &SqlitePool, id: i64, slide: usize) -> Result<()> {
     sqlx::query(
         r#"UPDATE sessions SET current_slide = ?, interaction_open = 1,
@@ -932,6 +968,10 @@ mod tests {
             published_source
         );
         let session = start_session(&pool, deck.id, version_id).await.unwrap();
+        assert_eq!(
+            deck_slug_for_session(&pool, session.id).await.unwrap(),
+            deck.slug
+        );
 
         replace_answer(&pool, session.id, 0, "participant", "poll", "0")
             .await
@@ -1018,6 +1058,74 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn deletes_inactive_decks_and_ended_sessions_with_their_archives() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+
+        let deck_session = start_test_session(&pool, "delete-deck").await;
+        let deck = deck_by_slug(&pool, "delete-deck").await.unwrap().unwrap();
+        assert!(!delete_deck(&pool, deck.id).await.unwrap());
+        let deck_token = "a".repeat(64);
+        finish_session_with_artifact(
+            &pool,
+            deck_session.id,
+            now_millis(),
+            &deck_token,
+            b"deck archive",
+        )
+        .await
+        .unwrap();
+
+        assert!(delete_deck(&pool, deck.id).await.unwrap());
+        assert!(deck_by_slug(&pool, "delete-deck").await.unwrap().is_none());
+        assert!(
+            session_by_code(&pool, &deck_session.code)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            artifact_by_token(&pool, &deck_token)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let ended_session = start_test_session(&pool, "delete-session").await;
+        let session_token = "b".repeat(64);
+        finish_session_with_artifact(
+            &pool,
+            ended_session.id,
+            now_millis(),
+            &session_token,
+            b"session archive",
+        )
+        .await
+        .unwrap();
+
+        assert!(delete_ended_session(&pool, ended_session.id).await.unwrap());
+        assert!(
+            session_by_code(&pool, &ended_session.code)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            artifact_by_token(&pool, &session_token)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            deck_by_slug(&pool, "delete-session")
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 
