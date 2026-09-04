@@ -281,7 +281,9 @@ jobs:
             --cookie "${cookie_jar}" \
             --data-urlencode "title=Intro to Rust" \
             --data-urlencode "source@examples/intro-to-rust.md" \
-            --data-urlencode "font=system" \
+            --data-urlencode "headline_font=inter" \
+            --data-urlencode "text_font=inter" \
+            --data-urlencode "code_font=jetbrains-mono" \
             --data-urlencode "background=#1e1e2e" \
             --data-urlencode "text=#cdd6f4" \
             --data-urlencode "accent=#f9e2af" \
