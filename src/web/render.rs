@@ -1008,8 +1008,8 @@ mod tests {
     use crate::{
         markdown::parse_deck,
         models::{
-            DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, DeckVersion,
-            LiveSession, Theme,
+            DEFAULT_CODE_FONT, DEFAULT_HEADLINE_FONT, DEFAULT_TEXT_FONT, DEFAULT_THEME_ACCENT,
+            DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, DeckVersion, LiveSession, Theme,
         },
     };
 
@@ -1045,12 +1045,7 @@ mod tests {
             "# First\n\n:::notes\nDo not preview this private note.\n:::\n\n---\n\n# Second",
         )
         .unwrap();
-        let theme = Theme {
-            font: "system".into(),
-            background: DEFAULT_THEME_BACKGROUND.into(),
-            text: DEFAULT_THEME_TEXT.into(),
-            accent: DEFAULT_THEME_ACCENT.into(),
-        };
+        let theme = Theme::default();
 
         let html = preview(&document, &theme);
 
@@ -1088,12 +1083,7 @@ mod tests {
     #[test]
     fn questionless_polls_omit_interaction_headings() {
         let document = parse_deck("# Coffee or beer?\n\n:::poll\n- Coffee\n- Beer\n:::").unwrap();
-        let theme = Theme {
-            font: "system".into(),
-            background: DEFAULT_THEME_BACKGROUND.into(),
-            text: DEFAULT_THEME_TEXT.into(),
-            accent: DEFAULT_THEME_ACCENT.into(),
-        };
+        let theme = Theme::default();
         let session = LiveSession {
             id: 1,
             deck_version_id: 1,
@@ -1172,7 +1162,9 @@ mod tests {
         let version = DeckVersion {
             title: "A useful deck".into(),
             source: String::new(),
-            theme_font: "system".into(),
+            theme_headline_font: DEFAULT_HEADLINE_FONT.into(),
+            theme_text_font: DEFAULT_TEXT_FONT.into(),
+            theme_code_font: DEFAULT_CODE_FONT.into(),
             theme_background: DEFAULT_THEME_BACKGROUND.into(),
             theme_text: DEFAULT_THEME_TEXT.into(),
             theme_accent: DEFAULT_THEME_ACCENT.into(),

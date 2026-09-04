@@ -37,11 +37,33 @@
         <button class="ghost icon-only" type="button" popovertarget="editor-settings" popovertargetaction="hide" aria-label="Close settings">×</button>
       </header>
       <div class="theme-fields">
-        <label>Font
-          <select name="font">
-            <option value="system"{% if deck.theme_font == "system" %} selected{% endif %}>System sans</option>
-            <option value="serif"{% if deck.theme_font == "serif" %} selected{% endif %}>Serif</option>
-            <option value="mono"{% if deck.theme_font == "mono" %} selected{% endif %}>Monospace</option>
+        <label>Headline font
+          <select name="headline_font">
+            <option value="inter"{% if deck.theme_headline_font == "inter" %} selected{% endif %}>Inter</option>
+            <option value="bebas-neue"{% if deck.theme_headline_font == "bebas-neue" %} selected{% endif %}>Bebas Neue</option>
+            <option value="happy"{% if deck.theme_headline_font == "happy" %} selected{% endif %}>Happy Sans</option>
+            <option value="merriweather"{% if deck.theme_headline_font == "merriweather" %} selected{% endif %}>Merriweather</option>
+            <option value="system"{% if deck.theme_headline_font == "system" %} selected{% endif %}>System sans</option>
+            <option value="georgia"{% if deck.theme_headline_font == "georgia" %} selected{% endif %}>Georgia</option>
+            <option value="jetbrains-mono"{% if deck.theme_headline_font == "jetbrains-mono" %} selected{% endif %}>JetBrains Mono</option>
+            <option value="system-mono"{% if deck.theme_headline_font == "system-mono" %} selected{% endif %}>System monospace</option>
+          </select>
+        </label>
+        <label>Text font
+          <select name="text_font">
+            <option value="inter"{% if deck.theme_text_font == "inter" %} selected{% endif %}>Inter</option>
+            <option value="happy"{% if deck.theme_text_font == "happy" %} selected{% endif %}>Happy Sans</option>
+            <option value="merriweather"{% if deck.theme_text_font == "merriweather" %} selected{% endif %}>Merriweather</option>
+            <option value="system"{% if deck.theme_text_font == "system" %} selected{% endif %}>System sans</option>
+            <option value="georgia"{% if deck.theme_text_font == "georgia" %} selected{% endif %}>Georgia</option>
+            <option value="jetbrains-mono"{% if deck.theme_text_font == "jetbrains-mono" %} selected{% endif %}>JetBrains Mono</option>
+            <option value="system-mono"{% if deck.theme_text_font == "system-mono" %} selected{% endif %}>System monospace</option>
+          </select>
+        </label>
+        <label>Code font
+          <select name="code_font">
+            <option value="jetbrains-mono"{% if deck.theme_code_font == "jetbrains-mono" %} selected{% endif %}>JetBrains Mono</option>
+            <option value="system-mono"{% if deck.theme_code_font == "system-mono" %} selected{% endif %}>System monospace</option>
           </select>
         </label>
         <label>Background <input type="color" name="background" value="{{ deck.theme_background }}"></label>

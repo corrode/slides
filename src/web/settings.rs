@@ -20,7 +20,9 @@ const CREATE_JSON_EXAMPLE: &str = r##"{
   "slug": "reliable-rust-services",
   "source": "# Reliable Rust services\n\nOne idea per slide.\n\n---\n\n# Start with failure modes",
   "theme": {
-    "font": "system",
+    "headline_font": "bebas-neue",
+    "text_font": "inter",
+    "code_font": "jetbrains-mono",
     "background": "#1e1e2e",
     "text": "#cdd6f4",
     "accent": "#f9e2af"

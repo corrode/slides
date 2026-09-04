@@ -12,7 +12,7 @@ The current vertical slice supports:
 - Anonymous polls, word clouds, quizzes, card ordering, raised hands, audience questions with upvotes, and rate-limited reactions
 - Live horizontal and vertical result charts over Server-Sent Events
 - Responsive presenter and audience views
-- Structured font and color themes
+- Independent headline, text, and code fonts plus configurable color themes
 - A bearer-authenticated JSON API for creating, reading, updating, and deleting presentations
 
 ## Run it
@@ -54,7 +54,7 @@ All API requests use `Authorization: Bearer <token>`. The versioned endpoints ar
 - `PATCH /api/v1/presentations/{slug}`
 - `DELETE /api/v1/presentations/{slug}`
 
-Create and source-update requests validate the Slides Markdown before saving it. Request bodies are limited to 2 MiB, and API errors use a JSON `error.code` plus `error.message` shape. Full examples and the request schema are available on the settings page.
+Create and source-update requests validate the Slides Markdown before saving it. Theme objects can set `headline_font`, `text_font`, and `code_font` independently; the legacy `font` field remains accepted for compatibility. Request bodies are limited to 2 MiB, and API errors use a JSON `error.code` plus `error.message` shape. Full examples and the request schema are available on the settings page.
 
 Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 

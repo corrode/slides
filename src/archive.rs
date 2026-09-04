@@ -248,9 +248,11 @@ pub async fn build(
             .collect(),
     };
     let audience_json = serde_json::to_vec_pretty(&data)?;
+    let theme = Theme::from(version);
+    let font_assets = selected_font_assets(&theme);
     let page = ArchiveTemplate {
         title: version.title.clone(),
-        theme_style: Theme::from(version).style(),
+        theme_style: theme.style(),
         slides,
         has_mermaid: document
             .slides
@@ -259,9 +261,11 @@ pub async fn build(
     }
     .render()?;
 
-    tokio::task::spawn_blocking(move || package(page, audience_json, Path::new("assets")))
-        .await
-        .context("archive packaging task failed")?
+    tokio::task::spawn_blocking(move || {
+        package(page, audience_json, Path::new("assets"), &font_assets)
+    })
+    .await
+    .context("archive packaging task failed")?
 }
 
 fn response_display_value(
@@ -327,7 +331,12 @@ fn participant_ids(
         .collect()
 }
 
-fn package(mut page: String, audience_json: Vec<u8>, asset_root: &Path) -> Result<Vec<u8>> {
+fn package(
+    mut page: String,
+    audience_json: Vec<u8>,
+    asset_root: &Path,
+    font_assets: &BTreeSet<&'static str>,
+) -> Result<Vec<u8>> {
     let mut packaged_assets = BTreeMap::new();
     let mut missing_assets = Vec::new();
     for (url, path) in local_assets(&page) {
@@ -349,6 +358,11 @@ fn package(mut page: String, audience_json: Vec<u8>, asset_root: &Path) -> Resul
         let license = std::fs::read(asset_root.join("vendor/mermaid/LICENSE"))
             .context("could not read the Mermaid license for the session archive")?;
         packaged_assets.insert("vendor/mermaid/LICENSE".into(), license);
+    }
+    for path in font_assets {
+        let contents = std::fs::read(asset_root.join(path))
+            .with_context(|| format!("could not read {path} for the session archive"))?;
+        packaged_assets.insert((*path).into(), contents);
     }
 
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -374,6 +388,36 @@ fn package(mut page: String, audience_json: Vec<u8>, asset_root: &Path) -> Resul
         )?;
     }
     Ok(writer.finish()?.into_inner())
+}
+
+fn selected_font_assets(theme: &Theme) -> BTreeSet<&'static str> {
+    let mut assets = BTreeSet::from(["fonts/README.md"]);
+    for font in [&theme.headline_font, &theme.text_font, &theme.code_font] {
+        match font.as_str() {
+            "inter" => assets.extend([
+                "fonts/inter-variable.woff2",
+                "fonts/inter-variable-italic.woff2",
+                "fonts/LICENSE-Inter.txt",
+            ]),
+            "bebas-neue" => assets.extend([
+                "fonts/bebas-neue-regular.woff2",
+                "fonts/LICENSE-Bebas-Neue.txt",
+            ]),
+            "happy" => assets.extend(["fonts/happy-headline.woff2", "fonts/happy-regular.woff2"]),
+            "merriweather" => assets.extend([
+                "fonts/merriweather-regular.woff2",
+                "fonts/merriweather-bold.woff2",
+                "fonts/merriweather-italic.woff2",
+                "fonts/LICENSE-Merriweather.txt",
+            ]),
+            "jetbrains-mono" => assets.extend([
+                "fonts/jetbrains-mono-regular.woff2",
+                "fonts/LICENSE-JetBrains-Mono.txt",
+            ]),
+            _ => {}
+        }
+    }
+    assets
 }
 
 fn write_entry(
@@ -431,8 +475,10 @@ pub fn read_entry(archive: &[u8], name: &str) -> Result<Option<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_assets, package, read_entry, response_display_value};
-    use crate::markdown::parse_deck;
+    use std::collections::BTreeSet;
+
+    use super::{local_assets, package, read_entry, response_display_value, selected_font_assets};
+    use crate::{markdown::parse_deck, models::Theme};
 
     #[test]
     fn resolves_stored_option_indexes_for_readers() {
@@ -443,6 +489,25 @@ mod tests {
             response_display_value(&document, 0, "wordcloud", "ownership"),
             "ownership"
         );
+    }
+
+    #[test]
+    fn selects_only_fonts_used_by_the_theme() {
+        let theme = Theme {
+            headline_font: "happy".into(),
+            text_font: "merriweather".into(),
+            code_font: "system-mono".into(),
+            ..Theme::default()
+        };
+
+        let assets = selected_font_assets(&theme);
+
+        assert!(assets.contains("fonts/happy-headline.woff2"));
+        assert!(assets.contains("fonts/happy-regular.woff2"));
+        assert!(assets.contains("fonts/merriweather-italic.woff2"));
+        assert!(assets.contains("fonts/LICENSE-Merriweather.txt"));
+        assert!(!assets.contains("fonts/inter-variable.woff2"));
+        assert!(!assets.contains("fonts/jetbrains-mono-regular.woff2"));
     }
 
     #[test]
@@ -462,9 +527,24 @@ mod tests {
         )
         .unwrap();
         std::fs::write(directory.path().join("cat.webp"), b"cat").unwrap();
+        std::fs::create_dir_all(directory.path().join("fonts/licenses")).unwrap();
+        std::fs::write(
+            directory.path().join("fonts/example-regular.woff2"),
+            b"font data",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("fonts/licenses/LICENSE-example.txt"),
+            b"font license",
+        )
+        .unwrap();
         let page = r#"<script src="/assets/vendor/mermaid/mermaid.min.js"></script><script src="/assets/app.js"></script><img src="/assets/cat.webp?v=2"><img src="/assets/missing.png"><img src="/assets/../secret">"#.into();
+        let font_assets = BTreeSet::from([
+            "fonts/example-regular.woff2",
+            "fonts/licenses/LICENSE-example.txt",
+        ]);
 
-        let archive = package(page, b"{}".to_vec(), directory.path()).unwrap();
+        let archive = package(page, b"{}".to_vec(), directory.path(), &font_assets).unwrap();
         let index =
             String::from_utf8(read_entry(&archive, "index.html").unwrap().unwrap()).unwrap();
 
@@ -490,6 +570,18 @@ mod tests {
                 .unwrap()
                 .unwrap(),
             b"MIT License"
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/fonts/example-regular.woff2")
+                .unwrap()
+                .unwrap(),
+            b"font data"
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/fonts/licenses/LICENSE-example.txt")
+                .unwrap()
+                .unwrap(),
+            b"font license"
         );
         assert!(read_entry(&archive, "../secret").unwrap().is_none());
         assert!(

@@ -11,7 +11,10 @@ use serde_json::json;
 use crate::{
     markdown::parse_deck,
     models::{
+        CODE_FONT_IDS, DEFAULT_CODE_FONT, DEFAULT_HEADLINE_FONT, DEFAULT_TEXT_FONT,
         DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck, DeckSummary,
+        HEADLINE_FONT_IDS, TEXT_FONT_IDS, Theme, legacy_font_id, valid_code_font,
+        valid_headline_font, valid_text_font,
     },
     store,
 };
@@ -19,7 +22,6 @@ use crate::{
 use super::{AppState, hash};
 
 const MAX_API_BODY_BYTES: usize = 2 * 1024 * 1024;
-const DEFAULT_FONT: &str = "system";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -46,6 +48,9 @@ struct CreatePresentation {
 #[serde(deny_unknown_fields)]
 struct ThemeInput {
     font: Option<String>,
+    headline_font: Option<String>,
+    text_font: Option<String>,
+    code_font: Option<String>,
     background: Option<String>,
     text: Option<String>,
     accent: Option<String>,
@@ -54,6 +59,9 @@ struct ThemeInput {
 impl ThemeInput {
     fn is_empty(&self) -> bool {
         self.font.is_none()
+            && self.headline_font.is_none()
+            && self.text_font.is_none()
+            && self.code_font.is_none()
             && self.background.is_none()
             && self.text.is_none()
             && self.accent.is_none()
@@ -115,12 +123,7 @@ impl From<&Deck> for Presentation {
             slug: deck.slug.clone(),
             title: deck.title.clone(),
             source: deck.draft_source.clone(),
-            theme: PresentationTheme {
-                font: deck.theme_font.clone(),
-                background: deck.theme_background.clone(),
-                text: deck.theme_text.clone(),
-                accent: deck.theme_accent.clone(),
-            },
+            theme: PresentationTheme::from(deck),
         }
     }
 }
@@ -128,9 +131,26 @@ impl From<&Deck> for Presentation {
 #[derive(Debug, Serialize)]
 struct PresentationTheme {
     font: String,
+    headline_font: String,
+    text_font: String,
+    code_font: String,
     background: String,
     text: String,
     accent: String,
+}
+
+impl From<&Deck> for PresentationTheme {
+    fn from(deck: &Deck) -> Self {
+        Self {
+            font: legacy_font_id(&deck.theme_headline_font).into(),
+            headline_font: deck.theme_headline_font.clone(),
+            text_font: deck.theme_text_font.clone(),
+            code_font: deck.theme_code_font.clone(),
+            background: deck.theme_background.clone(),
+            text: deck.theme_text.clone(),
+            accent: deck.theme_accent.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -247,24 +267,15 @@ async fn create(
     };
     let theme = merged_theme(None, payload.theme)?;
 
-    let deck = store::create_deck_with_content(
-        &state.pool,
-        &slug,
-        &title,
-        &payload.source,
-        &theme.font,
-        &theme.background,
-        &theme.text,
-        &theme.accent,
-    )
-    .await
-    .map_err(|error| {
-        if error.to_string().contains("UNIQUE constraint failed") {
-            ApiError::conflict("That presentation slug is already in use.")
-        } else {
-            ApiError::internal(error)
-        }
-    })?;
+    let deck = store::create_deck_with_content(&state.pool, &slug, &title, &payload.source, &theme)
+        .await
+        .map_err(|error| {
+            if error.to_string().contains("UNIQUE constraint failed") {
+                ApiError::conflict("That presentation slug is already in use.")
+            } else {
+                ApiError::internal(error)
+            }
+        })?;
 
     let location = format!("/api/v1/presentations/{}", deck.slug);
     let mut response = (StatusCode::CREATED, Json(Presentation::from(&deck))).into_response();
@@ -308,20 +319,19 @@ async fn update(
         deck.draft_source = source;
     }
     let theme = merged_theme(Some(&deck), payload.theme.unwrap_or_default())?;
-    deck.theme_font = theme.font;
-    deck.theme_background = theme.background;
-    deck.theme_text = theme.text;
-    deck.theme_accent = theme.accent;
+    deck.theme_headline_font = theme.headline_font.clone();
+    deck.theme_text_font = theme.text_font.clone();
+    deck.theme_code_font = theme.code_font.clone();
+    deck.theme_background = theme.background.clone();
+    deck.theme_text = theme.text.clone();
+    deck.theme_accent = theme.accent.clone();
 
     store::save_deck(
         &state.pool,
         deck.id,
         &deck.title,
         &deck.draft_source,
-        &deck.theme_font,
-        &deck.theme_background,
-        &deck.theme_text,
-        &deck.theme_accent,
+        &theme,
     )
     .await
     .map_err(ApiError::internal)?;
@@ -471,16 +481,23 @@ fn validate_source(source: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn merged_theme(
-    existing: Option<&Deck>,
-    update: ThemeInput,
-) -> Result<PresentationTheme, ApiError> {
-    let theme = PresentationTheme {
-        font: update.font.unwrap_or_else(|| {
-            existing
-                .map(|deck| deck.theme_font.clone())
-                .unwrap_or_else(|| DEFAULT_FONT.into())
-        }),
+fn merged_theme(existing: Option<&Deck>, update: ThemeInput) -> Result<Theme, ApiError> {
+    let legacy_fonts = update.font.as_deref().map(legacy_font_pair).transpose()?;
+    let theme = Theme {
+        headline_font: update
+            .headline_font
+            .or_else(|| legacy_fonts.map(|fonts| fonts.0.into()))
+            .or_else(|| existing.map(|deck| deck.theme_headline_font.clone()))
+            .unwrap_or_else(|| DEFAULT_HEADLINE_FONT.into()),
+        text_font: update
+            .text_font
+            .or_else(|| legacy_fonts.map(|fonts| fonts.1.into()))
+            .or_else(|| existing.map(|deck| deck.theme_text_font.clone()))
+            .unwrap_or_else(|| DEFAULT_TEXT_FONT.into()),
+        code_font: update
+            .code_font
+            .or_else(|| existing.map(|deck| deck.theme_code_font.clone()))
+            .unwrap_or_else(|| DEFAULT_CODE_FONT.into()),
         background: update.background.unwrap_or_else(|| {
             existing
                 .map(|deck| deck.theme_background.clone())
@@ -497,10 +514,23 @@ fn merged_theme(
                 .unwrap_or_else(|| DEFAULT_THEME_ACCENT.into())
         }),
     };
-    if !matches!(theme.font.as_str(), "system" | "serif" | "mono") {
-        return Err(ApiError::validation(
-            "Theme font must be system, serif, or mono.",
-        ));
+    if !valid_headline_font(&theme.headline_font) {
+        return Err(ApiError::validation(format!(
+            "Theme headline_font must be one of: {}.",
+            HEADLINE_FONT_IDS.join(", ")
+        )));
+    }
+    if !valid_text_font(&theme.text_font) {
+        return Err(ApiError::validation(format!(
+            "Theme text_font must be one of: {}.",
+            TEXT_FONT_IDS.join(", ")
+        )));
+    }
+    if !valid_code_font(&theme.code_font) {
+        return Err(ApiError::validation(format!(
+            "Theme code_font must be one of: {}.",
+            CODE_FONT_IDS.join(", ")
+        )));
     }
     if [&theme.background, &theme.text, &theme.accent]
         .into_iter()
@@ -511,6 +541,17 @@ fn merged_theme(
         ));
     }
     Ok(theme)
+}
+
+fn legacy_font_pair(font: &str) -> Result<(&'static str, &'static str), ApiError> {
+    match font {
+        "system" => Ok(("inter", "inter")),
+        "serif" => Ok(("georgia", "georgia")),
+        "mono" => Ok(("system-mono", "system-mono")),
+        _ => Err(ApiError::validation(
+            "Legacy theme font must be system, serif, or mono. Use headline_font, text_font, and code_font for new themes.",
+        )),
+    }
 }
 
 fn valid_color(color: &str) -> bool {
@@ -613,6 +654,9 @@ mod tests {
         let created = json_body(response).await;
         assert_eq!(created["slug"], "api-deck");
         assert_eq!(created["theme"]["font"], "mono");
+        assert_eq!(created["theme"]["headline_font"], "system-mono");
+        assert_eq!(created["theme"]["text_font"], "system-mono");
+        assert_eq!(created["theme"]["code_font"], DEFAULT_CODE_FONT);
         assert_eq!(created["theme"]["background"], DEFAULT_THEME_BACKGROUND);
 
         let response = app
@@ -633,7 +677,12 @@ mod tests {
                 "/presentations/api-deck",
                 Some(json!({
                     "title": "Updated API deck",
-                    "source": "# Updated\n\n```mermaid\nflowchart TD\n    A --> B\n```"
+                    "source": "# Updated\n\n```mermaid\nflowchart TD\n    A --> B\n```",
+                    "theme": {
+                        "headline_font": "bebas-neue",
+                        "text_font": "inter",
+                        "code_font": "system-mono"
+                    }
                 })),
             ))
             .await
@@ -642,6 +691,21 @@ mod tests {
         let updated = json_body(response).await;
         assert_eq!(updated["title"], "Updated API deck");
         assert!(updated["source"].as_str().unwrap().contains("mermaid"));
+        assert_eq!(updated["theme"]["font"], "system");
+        assert_eq!(updated["theme"]["headline_font"], "bebas-neue");
+        assert_eq!(updated["theme"]["text_font"], "inter");
+        assert_eq!(updated["theme"]["code_font"], "system-mono");
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                "PATCH",
+                "/presentations/api-deck",
+                Some(json!({ "theme": updated["theme"].clone() })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
 
         let response = app
             .clone()
@@ -686,10 +750,7 @@ mod tests {
             &deck.title,
             &deck.draft_source,
             &deck.draft_source,
-            &deck.theme_font,
-            &deck.theme_background,
-            &deck.theme_text,
-            &deck.theme_accent,
+            &Theme::from(&deck),
         )
         .await
         .unwrap();

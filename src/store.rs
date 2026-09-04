@@ -10,8 +10,8 @@ use sqlx::{
 };
 
 use crate::models::{
-    ApiTokenSummary, DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck,
-    DeckSummary, DeckVersion, EndedSessionSummary, LiveSession,
+    ApiTokenSummary, Deck, DeckSummary, DeckVersion, EndedSessionSummary, LiveSession, Theme,
+    legacy_font_id,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -145,46 +145,35 @@ pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<D
     let source = format!(
         "# {title}\n\nYour presentation starts here.\n\n---\n\n# Ask the audience\n\n:::poll question=\"Which option do you prefer?\"\n- The first option\n- The second option\n:::"
     );
-    create_deck_with_content(
-        pool,
-        slug,
-        title,
-        &source,
-        "system",
-        DEFAULT_THEME_BACKGROUND,
-        DEFAULT_THEME_TEXT,
-        DEFAULT_THEME_ACCENT,
-    )
-    .await
+    create_deck_with_content(pool, slug, title, &source, &Theme::default()).await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn create_deck_with_content(
     pool: &SqlitePool,
     slug: &str,
     title: &str,
     source: &str,
-    font: &str,
-    background: &str,
-    text: &str,
-    accent: &str,
+    theme: &Theme,
 ) -> Result<Deck> {
     let now = now_millis();
     Ok(sqlx::query_as::<_, Deck>(
         r#"INSERT INTO decks
-           (slug, title, draft_source, theme_font, theme_background, theme_text,
-            theme_accent, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           RETURNING id, slug, title, draft_source, theme_font, theme_background,
-                     theme_text, theme_accent"#,
+           (slug, title, draft_source, theme_font, theme_headline_font, theme_text_font,
+            theme_code_font, theme_background, theme_text, theme_accent, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           RETURNING id, slug, title, draft_source, theme_headline_font, theme_text_font,
+                     theme_code_font, theme_background, theme_text, theme_accent"#,
     )
     .bind(slug)
     .bind(title)
     .bind(source)
-    .bind(font)
-    .bind(background)
-    .bind(text)
-    .bind(accent)
+    .bind(legacy_font_id(&theme.headline_font))
+    .bind(&theme.headline_font)
+    .bind(&theme.text_font)
+    .bind(&theme.code_font)
+    .bind(&theme.background)
+    .bind(&theme.text)
+    .bind(&theme.accent)
     .bind(now)
     .bind(now)
     .fetch_one(pool)
@@ -194,8 +183,8 @@ pub async fn create_deck_with_content(
 #[cfg(test)]
 async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
     Ok(sqlx::query_as::<_, Deck>(
-        r#"SELECT id, slug, title, draft_source, theme_font, theme_background,
-                  theme_text, theme_accent
+        r#"SELECT id, slug, title, draft_source, theme_headline_font, theme_text_font,
+                  theme_code_font, theme_background, theme_text, theme_accent
            FROM decks WHERE id = ?"#,
     )
     .bind(id)
@@ -205,8 +194,8 @@ async fn get_deck(pool: &SqlitePool, id: i64) -> Result<Deck> {
 
 pub async fn deck_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<Deck>> {
     Ok(sqlx::query_as::<_, Deck>(
-        r#"SELECT id, slug, title, draft_source, theme_font, theme_background,
-                  theme_text, theme_accent
+        r#"SELECT id, slug, title, draft_source, theme_headline_font, theme_text_font,
+                  theme_code_font, theme_background, theme_text, theme_accent
            FROM decks WHERE slug = ?"#,
     )
     .bind(slug)
@@ -214,29 +203,29 @@ pub async fn deck_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<Deck>>
     .await?)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn save_deck(
     pool: &SqlitePool,
     id: i64,
     title: &str,
     source: &str,
-    font: &str,
-    background: &str,
-    text: &str,
-    accent: &str,
+    theme: &Theme,
 ) -> Result<()> {
     sqlx::query(
         r#"UPDATE decks
-           SET title = ?, draft_source = ?, theme_font = ?, theme_background = ?,
+           SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
+               theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
            WHERE id = ?"#,
     )
     .bind(title)
     .bind(source)
-    .bind(font)
-    .bind(background)
-    .bind(text)
-    .bind(accent)
+    .bind(legacy_font_id(&theme.headline_font))
+    .bind(&theme.headline_font)
+    .bind(&theme.text_font)
+    .bind(&theme.code_font)
+    .bind(&theme.background)
+    .bind(&theme.text)
+    .bind(&theme.accent)
     .bind(now_millis())
     .bind(id)
     .execute(pool)
@@ -244,32 +233,32 @@ pub async fn save_deck(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn save_and_publish_deck(
     pool: &SqlitePool,
     deck_id: i64,
     title: &str,
     draft_source: &str,
     published_source: &str,
-    font: &str,
-    background: &str,
-    text: &str,
-    accent: &str,
+    theme: &Theme,
 ) -> Result<i64> {
     let now = now_millis();
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"UPDATE decks
-           SET title = ?, draft_source = ?, theme_font = ?, theme_background = ?,
+           SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
+               theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
            WHERE id = ?"#,
     )
     .bind(title)
     .bind(draft_source)
-    .bind(font)
-    .bind(background)
-    .bind(text)
-    .bind(accent)
+    .bind(legacy_font_id(&theme.headline_font))
+    .bind(&theme.headline_font)
+    .bind(&theme.text_font)
+    .bind(&theme.code_font)
+    .bind(&theme.background)
+    .bind(&theme.text)
+    .bind(&theme.accent)
     .bind(now)
     .bind(deck_id)
     .execute(&mut *tx)
@@ -283,18 +272,22 @@ pub async fn save_and_publish_deck(
     .await?;
     let id = sqlx::query(
         r#"INSERT INTO deck_versions
-           (deck_id, version_number, title, source, theme_font, theme_background,
-            theme_text, theme_accent, show_join_code, published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"#,
+           (deck_id, version_number, title, source, theme_font, theme_headline_font,
+            theme_text_font, theme_code_font, theme_background, theme_text, theme_accent,
+            show_join_code, published_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"#,
     )
     .bind(deck_id)
     .bind(version_number)
     .bind(title)
     .bind(published_source)
-    .bind(font)
-    .bind(background)
-    .bind(text)
-    .bind(accent)
+    .bind(legacy_font_id(&theme.headline_font))
+    .bind(&theme.headline_font)
+    .bind(&theme.text_font)
+    .bind(&theme.code_font)
+    .bind(&theme.background)
+    .bind(&theme.text)
+    .bind(&theme.accent)
     .bind(now)
     .execute(&mut *tx)
     .await?
@@ -305,7 +298,8 @@ pub async fn save_and_publish_deck(
 
 pub async fn get_version(pool: &SqlitePool, id: i64) -> Result<DeckVersion> {
     Ok(sqlx::query_as::<_, DeckVersion>(
-        r#"SELECT title, source, theme_font, theme_background, theme_text, theme_accent
+        r#"SELECT title, source, theme_headline_font, theme_text_font, theme_code_font,
+                  theme_background, theme_text, theme_accent
            FROM deck_versions WHERE id = ?"#,
     )
     .bind(id)
@@ -980,7 +974,10 @@ pub fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Theme;
+    use crate::models::{
+        DEFAULT_CODE_FONT, DEFAULT_HEADLINE_FONT, DEFAULT_TEXT_FONT, DEFAULT_THEME_ACCENT,
+        DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Theme,
+    };
 
     async fn start_test_session(pool: &SqlitePool, slug: &str) -> LiveSession {
         let deck = create_deck(pool, slug, slug).await.unwrap();
@@ -990,10 +987,7 @@ mod tests {
             &deck.title,
             &deck.draft_source,
             &deck.draft_source,
-            &deck.theme_font,
-            &deck.theme_background,
-            &deck.theme_text,
-            &deck.theme_accent,
+            &Theme::from(&deck),
         )
         .await
         .unwrap();
@@ -1038,15 +1032,20 @@ mod tests {
         let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
         let pool = connect(&database_url).await.unwrap();
 
+        let theme = Theme {
+            headline_font: "bebas-neue".into(),
+            text_font: "merriweather".into(),
+            code_font: "system-mono".into(),
+            background: "#010203".into(),
+            text: "#fefefe".into(),
+            accent: "#abcdef".into(),
+        };
         let created = create_deck_with_content(
             &pool,
             "custom-deck",
             "Custom Deck",
             "# Custom source\n\nWith full content.",
-            "mono",
-            "#010203",
-            "#fefefe",
-            "#abcdef",
+            &theme,
         )
         .await
         .unwrap();
@@ -1058,7 +1057,15 @@ mod tests {
             persisted.draft_source,
             "# Custom source\n\nWith full content."
         );
-        assert_eq!(persisted.theme_font, "mono");
+        assert_eq!(persisted.theme_headline_font, "bebas-neue");
+        assert_eq!(persisted.theme_text_font, "merriweather");
+        assert_eq!(persisted.theme_code_font, "system-mono");
+        let legacy_font: String = sqlx::query_scalar("SELECT theme_font FROM decks WHERE id = ?")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(legacy_font, "system");
         assert_eq!(persisted.theme_background, "#010203");
         assert_eq!(persisted.theme_text, "#fefefe");
         assert_eq!(persisted.theme_accent, "#abcdef");
@@ -1074,6 +1081,9 @@ mod tests {
         let deck = create_deck(&pool, "rust-errors", "Rust Errors")
             .await
             .unwrap();
+        assert_eq!(deck.theme_headline_font, DEFAULT_HEADLINE_FONT);
+        assert_eq!(deck.theme_text_font, DEFAULT_TEXT_FONT);
+        assert_eq!(deck.theme_code_font, DEFAULT_CODE_FONT);
         assert_eq!(deck.theme_background, DEFAULT_THEME_BACKGROUND);
         assert_eq!(deck.theme_text, DEFAULT_THEME_TEXT);
         assert_eq!(deck.theme_accent, DEFAULT_THEME_ACCENT);
@@ -1083,16 +1093,19 @@ mod tests {
         assert!(!theme_style.contains("gradient"));
 
         let published_source = "# Published snapshot";
+        let published_theme = Theme {
+            headline_font: "bebas-neue".into(),
+            text_font: "merriweather".into(),
+            code_font: "system-mono".into(),
+            ..Theme::from(&deck)
+        };
         let version_id = save_and_publish_deck(
             &pool,
             deck.id,
             &deck.title,
             &deck.draft_source,
             published_source,
-            &deck.theme_font,
-            &deck.theme_background,
-            &deck.theme_text,
-            &deck.theme_accent,
+            &published_theme,
         )
         .await
         .unwrap();
@@ -1100,10 +1113,18 @@ mod tests {
             get_deck(&pool, deck.id).await.unwrap().draft_source,
             deck.draft_source
         );
-        assert_eq!(
-            get_version(&pool, version_id).await.unwrap().source,
-            published_source
-        );
+        let version = get_version(&pool, version_id).await.unwrap();
+        assert_eq!(version.source, published_source);
+        assert_eq!(version.theme_headline_font, "bebas-neue");
+        assert_eq!(version.theme_text_font, "merriweather");
+        assert_eq!(version.theme_code_font, "system-mono");
+        let legacy_font: String =
+            sqlx::query_scalar("SELECT theme_font FROM deck_versions WHERE id = ?")
+                .bind(version_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(legacy_font, "system");
         let session = start_session(&pool, deck.id, version_id).await.unwrap();
         assert_eq!(
             deck_slug_for_session(&pool, session.id).await.unwrap(),

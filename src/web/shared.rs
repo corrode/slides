@@ -100,6 +100,7 @@ fn content_type(path: &str) -> &'static str {
         Some("gif") => "image/gif",
         Some("webp") => "image/webp",
         Some("svg") => "image/svg+xml",
+        Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
     }
 }
@@ -144,5 +145,9 @@ mod tests {
 
         assert_eq!(archive_filename(&artifact), "rust-errors-apis-123456.zip");
         assert_eq!(content_type("assets/cat.webp"), "image/webp");
+        assert_eq!(
+            content_type("assets/fonts/inter-variable.woff2"),
+            "font/woff2"
+        );
     }
 }

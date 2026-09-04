@@ -11,7 +11,10 @@ use serde::Deserialize;
 use crate::{
     error::{AppError, AppResult},
     markdown::{parse_deck, resolve_code_references},
-    models::{Deck, DeckSummary, EndedSessionSummary, Theme},
+    models::{
+        Deck, DeckSummary, EndedSessionSummary, Theme, valid_code_font, valid_headline_font,
+        valid_text_font,
+    },
     store,
     web::{AppState, is_admin, require_admin, template},
 };
@@ -63,7 +66,9 @@ pub struct NewDeckForm {
 pub struct DeckForm {
     title: String,
     source: String,
-    font: String,
+    headline_font: String,
+    text_font: String,
+    code_font: String,
     background: String,
     text: String,
     accent: String,
@@ -235,15 +240,13 @@ pub async fn save(
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     validate_draft_form(&form)?;
+    let theme = theme_from_form(&form);
     store::save_deck(
         &state.pool,
         deck.id,
         form.title.trim(),
         &form.source,
-        &form.font,
-        &form.background,
-        &form.text,
-        &form.accent,
+        &theme,
     )
     .await?;
     let active = store::active_session_for_deck(&state.pool, deck.id)
@@ -301,16 +304,14 @@ pub async fn publish(
     let published_source = resolve_code_references(&form.source)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let theme = theme_from_form(&form);
     store::save_and_publish_deck(
         &state.pool,
         deck.id,
         form.title.trim(),
         &form.source,
         &published_source,
-        &form.font,
-        &form.background,
-        &form.text,
-        &form.accent,
+        &theme,
     )
     .await?;
     if headers.contains_key("hx-request") {
@@ -340,16 +341,14 @@ pub async fn start_session(
     let published_source = resolve_code_references(&form.source)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let theme = theme_from_form(&form);
     let version_id = store::save_and_publish_deck(
         &state.pool,
         deck.id,
         form.title.trim(),
         &form.source,
         &published_source,
-        &form.font,
-        &form.background,
-        &form.text,
-        &form.accent,
+        &theme,
     )
     .await?;
     let session = store::start_session(&state.pool, deck.id, version_id).await?;
@@ -376,8 +375,14 @@ fn validate_deck_form(form: &DeckForm) -> AppResult<()> {
 
 fn validate_draft_form(form: &DeckForm) -> AppResult<()> {
     validate_title(form.title.trim())?;
-    if !matches!(form.font.as_str(), "system" | "serif" | "mono") {
-        return Err(AppError::bad_request("Unsupported font choice."));
+    if !valid_headline_font(&form.headline_font) {
+        return Err(AppError::bad_request("Unsupported headline font choice."));
+    }
+    if !valid_text_font(&form.text_font) {
+        return Err(AppError::bad_request("Unsupported text font choice."));
+    }
+    if !valid_code_font(&form.code_font) {
+        return Err(AppError::bad_request("Unsupported code font choice."));
     }
     for color in [&form.background, &form.text, &form.accent] {
         if !valid_color(color) {
@@ -391,7 +396,9 @@ fn validate_draft_form(form: &DeckForm) -> AppResult<()> {
 
 fn theme_from_form(form: &DeckForm) -> Theme {
     Theme {
-        font: form.font.clone(),
+        headline_font: form.headline_font.clone(),
+        text_font: form.text_font.clone(),
+        code_font: form.code_font.clone(),
         background: form.background.clone(),
         text: form.text.clone(),
         accent: form.accent.clone(),
