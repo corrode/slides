@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
   <script src="/assets/hx-sse.min.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
-<body style="{{ theme_style }}">
+<body data-presentation-theme style="{{ theme_style }}">
   <div hx-sse:connect="{{ events_url }}" hx-target="#live-view" hx-swap="outerMorph"></div>
   <div id="reaction-feed" class="reaction-feed" aria-hidden="true"></div>
   {{ initial_live|safe }}

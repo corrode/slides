@@ -26,7 +26,14 @@
   and streamline the UI as well as the code. we are not live yet, so you have
   free reign. Use exa search to look for design best practices and
   accessibility.
+- [x] Add viewer-selectable light and dark presentation modes based on the personal blog palette.
+- [x] Add the ability to include local HTML pages as an iframe into the presentation.
 
 ## TODO
 
-- [ ] Add the ability to include local HTML pages as an iframe into the presentation.
+- [ ] Remove the fade to black at the bottom of presentation images.
+- [ ] Fix left and right arrow-key navigation while presenting.
+- [ ] Fix the intermittent startup error: `Security Error: Content at https://slides.corrode.dev/present/154183 may not load or link to file:///.` Reloading currently resolves it.
+- [ ] Check whether the presentation skill documents the API endpoint and how to upload slides.
+- [ ] Move the code snippet run button to the top-right corner and show it only on hover. Add a copy button next to it that copies the code to the clipboard.
+- [ ] Change the Markdown editor to also just be a CodeMirror editor with a Markdown mode. Then we can also enable vim mode etc. This should greatly reduce the custom code for syntax highlighting and editing.

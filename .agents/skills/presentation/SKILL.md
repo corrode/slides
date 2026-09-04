@@ -35,7 +35,7 @@ The normative project reference is `docs/slide-format.md`. Consult it if any syn
 - Do not place `---` before the first slide or after the final slide.
 - Do not add YAML front matter. A leading `---` is interpreted as an empty slide separator, not metadata.
 - Use ordinary CommonMark. Tables, strikethrough, task lists, and fenced code blocks are supported.
-- Raw HTML is displayed as text and cannot be used for layout or behavior.
+- Raw HTML is displayed as text and cannot be used for layout or behavior. Use the restricted local iframe directive only when the user provides a real bundle under `assets/embeds/`.
 - Unsupported presentation features such as columns, incremental reveals, backgrounds, custom classes, or per-slide metadata do not exist. Do not invent syntax for them.
 
 A basic deck has this shape:
@@ -124,6 +124,17 @@ Ordering interactions require at least two top-level `- ` items. Write them in t
 ```
 
 Always close every interaction with a line containing exactly `:::`.
+
+### Local HTML embeds
+
+Use a local iframe only when the user provides a trusted, self-contained HTML bundle under `assets/embeds/<bundle>/`. Both attributes are required, the body is empty, and dependencies must use relative URLs:
+
+```markdown
+:::iframe src="/assets/embeds/demo/index.html" title="Interactive demo"
+:::
+```
+
+Never use an external URL, traversal, raw `<iframe>` HTML, or files outside `assets/embeds/`. Write a concise, meaningful title for assistive technology. The embed is sandboxed and cannot use forms, popups, or parent-page access. Cross-origin resources and APIs such as `fetch` and WebSocket are blocked, but the page can navigate its own frame, so only use trusted local bundles.
 
 ### Mermaid diagrams
 

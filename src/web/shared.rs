@@ -44,10 +44,11 @@ pub async fn archive_file(
     let contents = archive::read_entry(&artifact.archive, &path)?
         .ok_or_else(|| AppError::not_found("Archived file not found."))?;
     let mut headers = immutable_headers();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(content_type(&path)),
-    );
+    let content_type = content_type(&path);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if content_type.starts_with("text/html") {
+        headers.extend(super::iframe_asset_headers());
+    }
     Ok((headers, contents).into_response())
 }
 
@@ -89,18 +90,31 @@ fn immutable_headers() -> HeaderMap {
 }
 
 fn content_type(path: &str) -> &'static str {
-    match FilePath::new(path)
+    let extension = FilePath::new(path)
         .extension()
         .and_then(|value| value.to_str())
-    {
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("html" | "htm") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
+        Some("wasm") => "application/wasm",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("png") => "image/png",
         Some("gif") => "image/gif",
         Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
         Some("svg") => "image/svg+xml",
+        Some("woff") => "font/woff",
         Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
         _ => "application/octet-stream",
     }
 }
@@ -145,6 +159,14 @@ mod tests {
 
         assert_eq!(archive_filename(&artifact), "rust-errors-apis-123456.zip");
         assert_eq!(content_type("assets/cat.webp"), "image/webp");
+        assert_eq!(
+            content_type("assets/embeds/demo/index.HTML"),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            content_type("assets/embeds/demo/app.js"),
+            "text/javascript; charset=utf-8"
+        );
         assert_eq!(
             content_type("assets/fonts/inter-variable.woff2"),
             "font/woff2"

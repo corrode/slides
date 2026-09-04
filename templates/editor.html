@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Edit {{ deck.title }} · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/vendor/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
@@ -21,6 +22,7 @@
         <input id="deck-title" class="editor-title-input" name="title" value="{{ deck.title }}" required maxlength="120" aria-label="Presentation title">
       </nav>
       <div class="editor-toolbar">
+        <button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span data-color-scheme-label>Light mode</span></button>
         <button class="ghost small" type="button" data-dialog-open="markdown-help" aria-haspopup="dialog"><span aria-hidden="true">?</span> Help</button>
         <button class="ghost small" type="button" popovertarget="editor-settings"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 12h2m12 0h2M12 4v2m0 12v2m-5.7-2.3 1.4-1.4m8.6-8.6 1.4-1.4m0 11.4-1.4-1.4M7.7 7.7 6.3 6.3"/></svg>Settings</button>
         <button class="secondary small" type="button" data-print-url="/admin/decks/{{ deck.slug }}/print" data-print-form="#deck-form"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM9 12h6M9 16h6M14 3v4h4"/></svg>Open PDF</button>
@@ -117,6 +119,8 @@ fn main() {}
 
 ![Description](/assets/image.webp)
 [External link](https://example.com)</code></pre></section>
+      <section><h3>Local HTML</h3><pre><code>:::iframe src=&quot;/assets/embeds/demo/index.html&quot; title=&quot;Interactive demo&quot;
+:::</code></pre></section>
       <section><h3>Mermaid diagram</h3><pre><code>&#96;&#96;&#96;mermaid
 flowchart LR
     Draft --&gt; Review --&gt; Present

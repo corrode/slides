@@ -23,6 +23,7 @@ pub struct Slide {
     pub html: String,
     pub interaction: Option<Interaction>,
     pub notes: Option<String>,
+    pub iframe_assets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +69,9 @@ pub fn parse_deck(source: &str) -> Result<DeckDocument> {
     let slides = raw_slides
         .into_iter()
         .enumerate()
-        .map(|(index, source)| parse_slide(source).with_context(|| format!("slide {}", index + 1)))
+        .map(|(index, source)| {
+            parse_slide(source, index).with_context(|| format!("slide {}", index + 1))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(DeckDocument { slides })
@@ -224,34 +227,76 @@ fn split_slides(source: &str) -> Vec<&str> {
         Some((current, line))
     }) {
         if !inside_fence(line, &mut fence) && line.trim() == "---" {
-            let slide = source[start..offset].trim();
-            if !slide.is_empty() {
+            if let Some(slide) = nonempty_slide(&source[start..offset]) {
                 slides.push(slide);
             }
             start = offset + line.len();
         }
     }
 
-    let final_slide = source[start..].trim();
-    if !final_slide.is_empty() {
-        slides.push(final_slide);
+    if let Some(slide) = nonempty_slide(&source[start..]) {
+        slides.push(slide);
     }
     slides
 }
 
-fn parse_slide(source: &str) -> Result<Slide> {
+fn nonempty_slide(source: &str) -> Option<&str> {
+    let source = source.trim_matches(['\r', '\n']);
+    (!source.trim().is_empty()).then_some(source)
+}
+
+const IFRAME_MARKER_PREFIX: &str = "\u{e000}slides-iframe-";
+
+#[derive(Debug)]
+struct IframeSpec {
+    src: String,
+    asset_path: String,
+    title: String,
+}
+
+#[derive(Debug)]
+struct ExtractedSlide {
+    markdown: String,
+    iframes: Vec<IframeSpec>,
+    interaction: Option<Interaction>,
+    notes: Option<String>,
+}
+
+fn parse_slide(source: &str, slide_index: usize) -> Result<Slide> {
     let source = resolve_code_references(source)?;
-    let (markdown, interaction, notes) = extract_directives(&source)?;
+    if source.contains(IFRAME_MARKER_PREFIX) {
+        bail!("slide content contains a reserved iframe marker");
+    }
+    let extracted = extract_directives(&source)?;
+    let mut html = render_markdown(&extracted.markdown);
+    for (iframe_index, iframe) in extracted.iframes.iter().enumerate() {
+        let marker = format!("<p>{}</p>\n", iframe_marker(iframe_index));
+        if !html.contains(&marker) {
+            bail!("could not place iframe in rendered slide");
+        }
+        html = html.replacen(
+            &marker,
+            &render_iframe(iframe, slide_index, iframe_index),
+            1,
+        );
+    }
+    let iframe_assets = extracted
+        .iframes
+        .into_iter()
+        .map(|iframe| iframe.asset_path)
+        .collect();
     Ok(Slide {
-        html: render_markdown(&markdown),
-        interaction,
-        notes: notes.map(|notes| render_markdown(&notes)),
+        html,
+        interaction: extracted.interaction,
+        notes: extracted.notes.map(|notes| render_markdown(&notes)),
+        iframe_assets,
     })
 }
 
-fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Option<String>)> {
+fn extract_directives(source: &str) -> Result<ExtractedSlide> {
     let lines: Vec<&str> = source.lines().collect();
     let mut output = Vec::new();
+    let mut iframes = Vec::new();
     let mut interaction = None;
     let mut notes = None;
     let mut index = 0;
@@ -259,15 +304,21 @@ fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Opti
 
     while index < lines.len() {
         if inside_fence(lines[index], &mut fence) {
-            output.push(lines[index]);
+            output.push(lines[index].to_owned());
             index += 1;
             continue;
         }
-        let line = lines[index].trim();
+        let Some(line) = directive_line(lines[index]) else {
+            output.push(lines[index].to_owned());
+            index += 1;
+            continue;
+        };
         let interaction_name = interaction_kind(line);
-        let is_notes = directive_name(line) == Some("notes");
-        if interaction_name.is_none() && !is_notes {
-            output.push(lines[index]);
+        let directive = directive_name(line);
+        let is_notes = directive == Some("notes");
+        let is_iframe = directive == Some("iframe");
+        if interaction_name.is_none() && !is_notes && !is_iframe {
+            output.push(lines[index].to_owned());
             index += 1;
             continue;
         }
@@ -277,7 +328,8 @@ fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Opti
         let mut body_fence = None;
         index += 1;
         while index < lines.len()
-            && (inside_fence(lines[index], &mut body_fence) || lines[index].trim() != ":::")
+            && (inside_fence(lines[index], &mut body_fence)
+                || directive_line(lines[index]) != Some(":::"))
         {
             body.push(lines[index]);
             index += 1;
@@ -285,6 +337,8 @@ fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Opti
         if index == lines.len() {
             let name = if is_notes {
                 "presenter notes"
+            } else if is_iframe {
+                "iframe"
             } else {
                 "interactive"
             };
@@ -303,6 +357,14 @@ fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Opti
             continue;
         }
 
+        if is_iframe {
+            output.push(String::new());
+            output.push(iframe_marker(iframes.len()));
+            output.push(String::new());
+            iframes.push(parse_iframe(&header, &body)?);
+            continue;
+        }
+
         if interaction.is_some() {
             bail!("only one interactive block is allowed per slide");
         }
@@ -315,7 +377,22 @@ fn extract_directives(source: &str) -> Result<(String, Option<Interaction>, Opti
         });
     }
 
-    Ok((output.join("\n"), interaction, notes))
+    Ok(ExtractedSlide {
+        markdown: output.join("\n"),
+        iframes,
+        interaction,
+        notes,
+    })
+}
+
+fn iframe_marker(index: usize) -> String {
+    format!("{IFRAME_MARKER_PREFIX}{index}\u{e001}")
+}
+
+fn directive_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let indentation = &line[..line.len() - trimmed.len()];
+    (!indentation.contains('\t') && indentation.len() <= 3).then(|| trimmed.trim_end())
 }
 
 fn directive_name(line: &str) -> Option<&str> {
@@ -330,6 +407,69 @@ fn interaction_kind(line: &str) -> Option<&'static str> {
         "ordering" => Some("ordering"),
         _ => None,
     }
+}
+
+fn parse_iframe(header: &str, body: &[&str]) -> Result<IframeSpec> {
+    let arguments = parse_arguments(header, &["src", "title"], &[])?;
+    if body.iter().any(|line| !line.trim().is_empty()) {
+        bail!("an iframe block cannot contain body content");
+    }
+
+    let src = arguments
+        .attribute("src")
+        .context("an iframe requires a src attribute")?
+        .trim();
+    let title = arguments
+        .attribute("title")
+        .context("an iframe requires a title attribute")?
+        .trim();
+    if title.is_empty() {
+        bail!("an iframe title cannot be empty");
+    }
+    if title.chars().count() > 200 || title.chars().any(char::is_control) {
+        bail!("an iframe title must be at most 200 characters and contain no control characters");
+    }
+    if src.chars().any(char::is_control) || src.contains(['\\', '%', ':']) {
+        bail!("an iframe src contains unsupported characters");
+    }
+
+    let path_end = src.find(['?', '#']).unwrap_or(src.len());
+    let path = &src[..path_end];
+    let relative = path
+        .strip_prefix("/assets/")
+        .context("an iframe src must start with /assets/")?;
+    let components = relative.split('/').collect::<Vec<_>>();
+    if components.len() < 3
+        || components[0] != "embeds"
+        || components
+            .iter()
+            .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        bail!("an iframe src must point inside /assets/embeds/<bundle>/");
+    }
+    let extension = Path::new(relative)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("html") && !extension.eq_ignore_ascii_case("htm") {
+        bail!("an iframe src must point to an HTML file");
+    }
+
+    Ok(IframeSpec {
+        src: src.to_owned(),
+        asset_path: relative.to_owned(),
+        title: title.to_owned(),
+    })
+}
+
+fn render_iframe(iframe: &IframeSpec, slide_index: usize, iframe_index: usize) -> String {
+    format!(
+        "<figure class=\"iframe-embed\"><iframe id=\"slide-iframe-{}-{}\" class=\"slide-iframe\" src=\"{}\" title=\"{}\" sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\"></iframe></figure>",
+        slide_index + 1,
+        iframe_index + 1,
+        html_escape::encode_double_quoted_attribute(&iframe.src),
+        html_escape::encode_double_quoted_attribute(&iframe.title),
+    )
 }
 
 fn parse_poll(header: &str, body: &[&str]) -> Result<Interaction> {
@@ -455,7 +595,7 @@ fn parse_arguments(
 ) -> Result<DirectiveArguments> {
     let directive = header
         .strip_prefix(":::")
-        .context("interaction directive must start with :::")?;
+        .context("directive must start with :::")?;
     let name_end = directive
         .find(char::is_whitespace)
         .unwrap_or(directive.len());
@@ -468,24 +608,24 @@ fn parse_arguments(
             .find(|character: char| character.is_whitespace() || character == '=')
             .unwrap_or(input.len());
         if key_end == 0 {
-            bail!("malformed interaction argument near {input:?}");
+            bail!("malformed directive argument near {input:?}");
         }
         let key = &input[..key_end];
         input = &input[key_end..];
 
         if let Some(value_input) = input.strip_prefix("=\"") {
             if !allowed_attributes.contains(&key) {
-                bail!("unsupported interaction attribute {key:?}");
+                bail!("unsupported directive attribute {key:?}");
             }
             if arguments
                 .attributes
                 .iter()
                 .any(|(existing, _)| existing == key)
             {
-                bail!("duplicate interaction attribute {key:?}");
+                bail!("duplicate directive attribute {key:?}");
             }
             let value_end = value_input.find('"').with_context(|| {
-                format!("interaction attribute {key:?} is missing a closing quote")
+                format!("directive attribute {key:?} is missing a closing quote")
             })?;
             let after = &value_input[value_end + 1..];
             if after
@@ -493,20 +633,20 @@ fn parse_arguments(
                 .next()
                 .is_some_and(|character| !character.is_whitespace())
             {
-                bail!("interaction attribute {key:?} must be followed by whitespace");
+                bail!("directive attribute {key:?} must be followed by whitespace");
             }
             arguments
                 .attributes
                 .push((key.to_owned(), value_input[..value_end].to_owned()));
             input = after;
         } else if input.starts_with('=') {
-            bail!("interaction attribute {key:?} must use a quoted value");
+            bail!("directive attribute {key:?} must use a quoted value");
         } else {
             if !allowed_flags.contains(&key) {
-                bail!("unsupported interaction flag {key:?}");
+                bail!("unsupported directive flag {key:?}");
             }
             if arguments.flags.iter().any(|existing| existing == key) {
-                bail!("duplicate interaction flag {key:?}");
+                bail!("duplicate directive flag {key:?}");
             }
             arguments.flags.push(key.to_owned());
         }
@@ -810,6 +950,80 @@ mod tests {
     }
 
     #[test]
+    fn parses_sandboxed_local_iframes_in_content_order() {
+        let deck = parse_deck(
+            "# Before\n\n:::iframe src=\"/assets/embeds/demo/index.html?step=1#example\" title=\"Interactive & accessible\"\n:::\n\nAfter the demo.\n\n:::poll\n- Yes\n- No\n:::"
+        )
+        .unwrap();
+        let slide = &deck.slides[0];
+
+        let heading = slide.html.find("<h1>Before</h1>").unwrap();
+        let iframe = slide.html.find("<iframe").unwrap();
+        let after = slide.html.find("After the demo.").unwrap();
+        assert!(heading < iframe && iframe < after);
+        assert!(slide.html.contains("id=\"slide-iframe-1-1\""));
+        assert!(
+            slide
+                .html
+                .contains("src=\"/assets/embeds/demo/index.html?step=1#example\"")
+        );
+        assert!(
+            slide
+                .html
+                .contains("title=\"Interactive &amp; accessible\"")
+        );
+        assert!(slide.html.contains("sandbox=\"allow-scripts\""));
+        assert!(!slide.html.contains("allow-same-origin"));
+        assert_eq!(slide.iframe_assets, ["embeds/demo/index.html"]);
+        assert!(slide.interaction.is_some());
+    }
+
+    #[test]
+    fn iframe_directives_preserve_whole_slide_markdown_semantics() {
+        let deck = parse_deck(
+            "[Link defined later][reference]\n\n:::iframe src=\"/assets/embeds/demo/index.html\" title=\"Demo\"\n:::\n\n[reference]: https://example.com",
+        )
+        .unwrap();
+
+        assert!(deck.slides[0].html.contains("href=\"https://example.com\""));
+        assert!(deck.slides[0].html.contains("<iframe"));
+    }
+
+    #[test]
+    fn rejects_unsafe_or_inaccessible_iframe_directives() {
+        for source in [
+            ":::iframe title=\"Missing source\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo/index.html\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo/index.html\" title=\"\"\n:::",
+            ":::iframe src=\"https://example.com/demo.html\" title=\"External\"\n:::",
+            ":::iframe src=\"//example.com/demo.html\" title=\"External\"\n:::",
+            ":::iframe src=\"/assets/demo.html\" title=\"Outside embeds\"\n:::",
+            ":::iframe src=\"/assets/embeds/../secret.html\" title=\"Traversal\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo/%2e%2e/secret.html\" title=\"Encoded traversal\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo:name/index.html\" title=\"Unsafe filename\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo/image.png\" title=\"Not HTML\"\n:::",
+            ":::iframe src=\"/assets/embeds/demo/index.html\" title=\"Body\"\nnot allowed\n:::",
+        ] {
+            let error = parse_deck(source).unwrap_err();
+            assert!(error.to_string().contains("slide 1"), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn ignores_iframe_markers_inside_code_blocks() {
+        for source in [
+            "```markdown\n:::iframe src=\"/assets/embeds/demo/index.html\" title=\"Example\"\n:::\n```",
+            "    :::iframe src=\"/assets/embeds/demo/index.html\" title=\"Example\"\n    :::",
+        ] {
+            let deck = parse_deck(source).unwrap();
+
+            assert!(deck.slides[0].iframe_assets.is_empty());
+            assert!(deck.slides[0].html.contains(":::iframe"));
+            assert!(!deck.slides[0].html.contains("<iframe"));
+        }
+    }
+
+    #[test]
     fn presenter_notes_can_coexist_with_an_interaction() {
         let deck = parse_deck(
             ":::poll\n- Rust\n- Go\n:::\n\n:::notes\nAsk for a show of hands first.\n:::",
@@ -842,8 +1056,12 @@ mod tests {
 
     #[test]
     fn strips_raw_html() {
-        let deck = parse_deck("<script>alert(1)</script>").unwrap();
+        let deck = parse_deck(
+            "<script>alert(1)</script><iframe src=\"/assets/embeds/demo/index.html\"></iframe>",
+        )
+        .unwrap();
         assert!(!deck.slides[0].html.contains("<script>"));
+        assert!(!deck.slides[0].html.contains("<iframe"));
     }
 
     #[test]

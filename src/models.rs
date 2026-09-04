@@ -21,9 +21,9 @@ pub const TEXT_FONT_IDS: &[&str] = &[
     "system-mono",
 ];
 pub const CODE_FONT_IDS: &[&str] = &["jetbrains-mono", "system-mono"];
-pub const DEFAULT_THEME_BACKGROUND: &str = "#1e1e2e";
-pub const DEFAULT_THEME_TEXT: &str = "#cdd6f4";
-pub const DEFAULT_THEME_ACCENT: &str = "#f9e2af";
+pub const DEFAULT_THEME_BACKGROUND: &str = "#282934";
+pub const DEFAULT_THEME_TEXT: &str = "#e1e1e1";
+pub const DEFAULT_THEME_ACCENT: &str = "#fc218a";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Deck {
@@ -117,19 +117,23 @@ impl Theme {
             && self.text == DEFAULT_THEME_TEXT
             && self.accent == DEFAULT_THEME_ACCENT;
         let background_deep = if is_default {
-            "#11111b"
+            "#20212a"
         } else {
             &self.background
         };
         let surface = if is_default {
-            "#181825"
+            "rgb(255 255 255 / 8%)"
         } else {
             &self.background
         };
-        let text_soft = if is_default { "#bac2de" } else { &self.text };
+        let text_soft = if is_default {
+            "rgb(255 255 255 / 68%)"
+        } else {
+            &self.text
+        };
 
         format!(
-            "--font-display:{headline_font};--font-sans:{text_font};--font-mono:{code_font};--bg:{};--bg-deep:{background_deep};--surface:{surface};--text:{};--text-soft:{text_soft};--highlight:{}",
+            "--font-display:{headline_font};--font-sans:{text_font};--font-mono:{code_font};--deck-bg:{};--deck-bg-deep:{background_deep};--deck-surface:{surface};--deck-text:{};--deck-text-soft:{text_soft};--deck-accent:{}",
             self.background, self.text, self.accent,
         )
     }
@@ -221,6 +225,9 @@ mod tests {
         assert!(
             style.contains("--font-mono:'JetBrains Mono', 'SFMono-Regular', Consolas, monospace")
         );
+        assert!(style.contains("--deck-bg:#282934"));
+        assert!(style.contains("--deck-text:#e1e1e1"));
+        assert!(style.contains("--deck-accent:#fc218a"));
         assert_eq!(legacy_font_id("happy"), "system");
         assert_eq!(legacy_font_id("georgia"), "serif");
         assert_eq!(legacy_font_id("system-mono"), "mono");

@@ -11,8 +11,10 @@ use std::sync::Arc;
 use askama::Template;
 use axum::{
     Router,
+    body::Body,
     extract::{DefaultBodyLimit, State},
-    http::{HeaderName, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -37,6 +39,10 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let assets = Router::new()
+        .fallback_service(ServeDir::new("assets"))
+        .layer(middleware::from_fn(sandbox_html_asset));
+
     Router::new()
         .route("/", get(session::landing))
         .route("/healthz", get(healthz))
@@ -102,12 +108,12 @@ pub fn router(state: AppState) -> Router {
         .route("/shared/{token}/", get(shared::archive_page))
         .route("/shared/{token}/download", get(shared::download))
         .route("/shared/{token}/{*path}", get(shared::archive_file))
-        .nest_service("/assets", ServeDir::new("assets"))
+        .nest("/assets", assets)
         .route("/{slug}", get(session::named_shortlink))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
-                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:; font-src 'self'; media-src 'self'; connect-src 'self'; frame-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
             ),
         ))
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -120,6 +126,39 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn sandbox_html_asset(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let is_html = response.status().is_success()
+        && response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html"));
+    if is_html {
+        response.headers_mut().extend(iframe_asset_headers());
+    }
+    response
+}
+
+pub(crate) fn iframe_asset_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+        ),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers
 }
 
 async fn healthz(State(state): State<AppState>) -> StatusCode {
@@ -180,4 +219,23 @@ pub fn require_admin(jar: &CookieJar, state: &AppState) -> AppResult<()> {
 
 pub fn template<T: Template>(value: T) -> AppResult<Response> {
     Ok(Html(value.render()?).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::header;
+
+    use super::iframe_asset_headers;
+
+    #[test]
+    fn iframe_assets_are_sandboxed_for_direct_and_embedded_views() {
+        let headers = iframe_asset_headers();
+        let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+
+        assert!(policy.contains("frame-ancestors 'self'"));
+        assert!(policy.contains("sandbox allow-scripts"));
+        assert!(policy.contains("connect-src 'none'"));
+        assert!(!policy.contains("allow-same-origin"));
+        assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+    }
 }

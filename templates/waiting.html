@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
 </head>
-<body style="{{ theme_style }}">
-  <header class="topbar"><a class="brand" href="/">Slides</a></header>
+<body data-presentation-theme style="{{ theme_style }}">
+  <header class="topbar"><a class="brand" href="/">Slides</a><div><button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span data-color-scheme-label>Light mode</span></button></div></header>
   <main class="audience-shell">
     <section class="interaction waiting-state">
       <p class="status-pill">Not live yet</p>

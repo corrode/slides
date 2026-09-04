@@ -4,19 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · Session archive</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="assets/app.css">
   {% if has_mermaid %}
   <script src="/assets/vendor/mermaid/mermaid.min.js" defer></script>
-  <script src="/assets/app.js" defer></script>
   {% endif %}
+  <script src="/assets/app.js" defer></script>
 </head>
-<body class="archive-page" style="{{ theme_style }}">
+<body class="archive-page" data-presentation-theme style="{{ theme_style }}">
   <header class="archive-toolbar">
     <div>
       <span class="status-pill success">Session archive</span>
       <strong>{{ title }}</strong>
     </div>
-    <nav aria-label="Archive downloads">
+    <nav aria-label="Archive actions">
+      <button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span data-color-scheme-label>Light mode</span></button>
       <a class="button secondary small" href="audience-input.json" download>Audience data</a>
       <a class="button small" href="download">Download ZIP</a>
     </nav>

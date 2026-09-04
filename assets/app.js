@@ -10,6 +10,75 @@
   let mermaidDiagramId = 0;
   let mermaidLoadPromise = null;
   let mermaidRenderPromise = Promise.resolve();
+  const COLOR_SCHEME_STORAGE = "slides-color-scheme";
+
+  function currentColorScheme() {
+    return document.documentElement.dataset.colorScheme === "light" ? "light" : "dark";
+  }
+
+  function storedColorScheme() {
+    try {
+      const saved = window.localStorage.getItem(COLOR_SCHEME_STORAGE);
+      return saved === "light" || saved === "dark" ? saved : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function updateColorSchemeControls() {
+    const current = currentColorScheme();
+    const next = current === "dark" ? "light" : "dark";
+    document.querySelectorAll("[data-color-scheme-toggle]").forEach((button) => {
+      button.setAttribute("aria-label", `Use ${next} mode`);
+      button.setAttribute("title", `Use ${next} mode`);
+
+      const icon = button.querySelector("[data-color-scheme-icon]");
+      const label = button.querySelector("[data-color-scheme-label]");
+      if (icon) icon.textContent = next === "light" ? "☀" : "☾";
+      if (label) label.textContent = `${next[0].toUpperCase()}${next.slice(1)} mode`;
+    });
+  }
+
+  function rerenderMermaidDiagrams() {
+    mermaidRenderPromise = mermaidRenderPromise
+      .then(() => new Promise((resolve) => window.requestAnimationFrame(resolve)))
+      .then(() => {
+        document.querySelectorAll("[data-mermaid-diagram]").forEach((diagram) => {
+          const source = diagram.querySelector("[data-mermaid-source]");
+          const output = diagram.querySelector("[data-mermaid-output]");
+          const error = diagram.querySelector("[data-mermaid-error]");
+          delete diagram.dataset.mermaidState;
+          if (source) source.hidden = false;
+          if (output) {
+            output.replaceChildren();
+            output.hidden = true;
+          }
+          if (error) error.hidden = true;
+        });
+        return renderMermaidDiagrams(document);
+      });
+  }
+
+  function applyColorScheme(colorScheme, persist = false) {
+    document.documentElement.dataset.colorScheme = colorScheme;
+    if (persist) {
+      try {
+        window.localStorage.setItem(COLOR_SCHEME_STORAGE, colorScheme);
+      } catch {
+        // The toggle remains usable when storage is unavailable.
+      }
+    }
+    updateColorSchemeControls();
+    rerenderMermaidDiagrams();
+  }
+
+  function initializeColorScheme() {
+    updateColorSchemeControls();
+    const preference = window.matchMedia?.("(prefers-color-scheme: dark)");
+    preference?.addEventListener("change", (event) => {
+      if (!storedColorScheme()) applyColorScheme(event.matches ? "dark" : "light");
+    });
+  }
 
   function rememberBars() {
     previousBarValues.clear();
@@ -421,12 +490,12 @@
   function mermaidThemeVariables(diagram) {
     const styles = window.getComputedStyle(diagram);
     const color = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
-    const background = color("--bg", "#1e1e2e");
-    const surface = color("--surface-raised", "#313244");
-    const text = color("--text", "#cdd6f4");
-    const softText = color("--text-soft", "#bac2de");
-    const accent = color("--highlight", "#f9e2af");
-    const border = color("--border-strong", "#585b70");
+    const background = color("--bg", "#282934");
+    const surface = color("--surface-raised", "rgb(255 255 255 / 12%)");
+    const text = color("--text", "#e1e1e1");
+    const softText = color("--text-soft", "rgb(255 255 255 / 68%)");
+    const accent = color("--highlight", "#fc218a");
+    const border = color("--border-strong", "rgb(255 255 255 / 32%)");
 
     return {
       background,
@@ -692,6 +761,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    initializeColorScheme();
     formatCreatedAt();
     initializeMarkdownEditor();
     animateBars();
@@ -746,6 +816,11 @@
   });
 
   document.addEventListener("click", (event) => {
+    const colorSchemeToggle = event.target.closest("[data-color-scheme-toggle]");
+    if (colorSchemeToggle) {
+      applyColorScheme(currentColorScheme() === "dark" ? "light" : "dark", true);
+      return;
+    }
     const dialogTrigger = event.target.closest("[data-dialog-open]");
     if (dialogTrigger) {
       const dialog = document.getElementById(dialogTrigger.dataset.dialogOpen);
@@ -904,6 +979,7 @@
     restorePreviewSlide();
     restorePresenterNotes();
     restorePresenterQuestions();
+    updateColorSchemeControls();
     initializeMermaidDiagrams();
     initializeRustPlaygrounds();
   });

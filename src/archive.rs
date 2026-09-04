@@ -1,10 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Cursor, Read, Write},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use askama::Template;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -250,6 +250,11 @@ pub async fn build(
     let audience_json = serde_json::to_vec_pretty(&data)?;
     let theme = Theme::from(version);
     let font_assets = selected_font_assets(&theme);
+    let iframe_assets = document
+        .slides
+        .iter()
+        .flat_map(|slide| slide.iframe_assets.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let page = ArchiveTemplate {
         title: version.title.clone(),
         theme_style: theme.style(),
@@ -262,7 +267,13 @@ pub async fn build(
     .render()?;
 
     tokio::task::spawn_blocking(move || {
-        package(page, audience_json, Path::new("assets"), &font_assets)
+        package(
+            page,
+            audience_json,
+            Path::new("assets"),
+            &font_assets,
+            &iframe_assets,
+        )
     })
     .await
     .context("archive packaging task failed")?
@@ -336,10 +347,19 @@ fn package(
     audience_json: Vec<u8>,
     asset_root: &Path,
     font_assets: &BTreeSet<&'static str>,
+    iframe_assets: &BTreeSet<String>,
 ) -> Result<Vec<u8>> {
     let mut packaged_assets = BTreeMap::new();
+    package_iframe_bundles(asset_root, iframe_assets, &mut packaged_assets)?;
     let mut missing_assets = Vec::new();
     for (url, path) in local_assets(&page) {
+        if packaged_assets.contains_key(&path) {
+            page = page.replace(
+                &format!("src=\"/assets/{url}\""),
+                &format!("src=\"assets/{url}\""),
+            );
+            continue;
+        }
         match std::fs::read(asset_root.join(&path)) {
             Ok(contents) => {
                 page = page.replace(
@@ -388,6 +408,196 @@ fn package(
         )?;
     }
     Ok(writer.finish()?.into_inner())
+}
+
+const MAX_IFRAME_BUNDLE_FILES: usize = 512;
+const MAX_IFRAME_BUNDLE_BYTES: u64 = 100 * 1024 * 1024;
+
+fn package_iframe_bundles(
+    asset_root: &Path,
+    iframe_assets: &BTreeSet<String>,
+    packaged_assets: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
+    if iframe_assets.is_empty() {
+        return Ok(());
+    }
+
+    let canonical_root = std::fs::canonicalize(asset_root)
+        .context("could not resolve the asset directory for iframe archives")?;
+    let canonical_embeds_root = std::fs::canonicalize(asset_root.join("embeds"))
+        .context("could not resolve the iframe embed directory")?;
+    let mut bundle_roots = BTreeSet::new();
+    for asset in iframe_assets {
+        let components = Path::new(asset)
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => value.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if components.len() < 3 || components[0] != "embeds" {
+            bail!("invalid iframe asset path {asset:?}");
+        }
+        bundle_roots.insert(PathBuf::from(components[0]).join(components[1]));
+    }
+
+    let mut file_count = 0;
+    let mut byte_count = 0;
+    for bundle_root in bundle_roots {
+        let requested_source = asset_root.join(&bundle_root);
+        if std::fs::symlink_metadata(&requested_source)?
+            .file_type()
+            .is_symlink()
+        {
+            bail!(
+                "iframe bundle roots cannot be symlinks: {}",
+                requested_source.display()
+            );
+        }
+        let source = std::fs::canonicalize(&requested_source).with_context(|| {
+            format!(
+                "could not resolve iframe bundle {:?}",
+                bundle_root.to_string_lossy()
+            )
+        })?;
+        if !source.starts_with(&canonical_root) || !source.starts_with(&canonical_embeds_root) {
+            bail!("iframe bundle escapes the embed directory");
+        }
+        collect_iframe_bundle(
+            &source,
+            &bundle_root,
+            packaged_assets,
+            &mut file_count,
+            &mut byte_count,
+        )?;
+    }
+    Ok(())
+}
+
+fn collect_iframe_bundle(
+    source: &Path,
+    archive_path: &Path,
+    packaged_assets: &mut BTreeMap<String, Vec<u8>>,
+    file_count: &mut usize,
+    byte_count: &mut u64,
+) -> Result<()> {
+    for entry in std::fs::read_dir(source).with_context(|| {
+        format!(
+            "could not read iframe bundle directory {}",
+            source.display()
+        )
+    })? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            bail!(
+                "iframe bundles cannot contain symlinks: {}",
+                entry.path().display()
+            );
+        }
+        let child_archive_path = archive_path.join(entry.file_name());
+        if file_type.is_dir() {
+            collect_iframe_bundle(
+                &entry.path(),
+                &child_archive_path,
+                packaged_assets,
+                file_count,
+                byte_count,
+            )?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let key = archive_path_string(&child_archive_path)?;
+        let metadata = entry.metadata()?;
+        let next_file_count = *file_count + 1;
+        let next_byte_count = (*byte_count)
+            .checked_add(metadata.len())
+            .context("iframe bundle size overflowed")?;
+        if next_file_count > MAX_IFRAME_BUNDLE_FILES {
+            bail!("iframe bundles contain more than {MAX_IFRAME_BUNDLE_FILES} files");
+        }
+        if next_byte_count > MAX_IFRAME_BUNDLE_BYTES {
+            bail!("iframe bundles exceed 100 MiB");
+        }
+
+        let mut contents = std::fs::read(entry.path())?;
+        if matches!(
+            child_archive_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("html" | "htm")
+        ) {
+            contents = secure_archived_html(contents)?;
+        }
+        *file_count = next_file_count;
+        *byte_count = next_byte_count;
+        packaged_assets.insert(key, contents);
+    }
+    Ok(())
+}
+
+fn archive_path_string(path: &Path) -> Result<String> {
+    path.components()
+        .map(|component| match component {
+            Component::Normal(value) => {
+                let value = value
+                    .to_str()
+                    .context("iframe bundle paths must be valid UTF-8")?;
+                if value.contains(['\\', ':']) || value.chars().any(char::is_control) {
+                    bail!("iframe bundle paths contain an unsafe filename");
+                }
+                Ok(value.to_owned())
+            }
+            _ => bail!("iframe bundle paths must be relative"),
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|components| components.join("/"))
+}
+
+const ARCHIVE_IFRAME_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+
+fn secure_archived_html(contents: Vec<u8>) -> Result<Vec<u8>> {
+    let mut html = String::from_utf8(contents).context("iframe HTML must be valid UTF-8")?;
+    let lowercase = html.to_ascii_lowercase();
+    let insertion = format!(
+        "<head><meta http-equiv=\"Content-Security-Policy\" content=\"{ARCHIVE_IFRAME_CSP}\"></head>"
+    );
+    let insertion_at = leading_doctype_end(&lowercase)?.unwrap_or_default();
+    html.insert_str(insertion_at, &insertion);
+    Ok(html.into_bytes())
+}
+
+fn leading_doctype_end(html: &str) -> Result<Option<usize>> {
+    let mut offset = 0;
+    loop {
+        let remaining = &html[offset..];
+        offset += remaining.len() - remaining.trim_start().len();
+        let remaining = &html[offset..];
+
+        if offset == 0 && remaining.starts_with('\u{feff}') {
+            offset += '\u{feff}'.len_utf8();
+            continue;
+        }
+        if remaining.starts_with("<!--") {
+            let Some(comment_end) = remaining.find("-->") else {
+                return Ok(None);
+            };
+            offset += comment_end + "-->".len();
+            continue;
+        }
+        if !remaining.starts_with("<!doctype") {
+            return Ok(None);
+        }
+        return remaining
+            .find('>')
+            .map(|doctype_end| Some(offset + doctype_end + 1))
+            .context("iframe HTML has an unterminated doctype");
+    }
 }
 
 fn selected_font_assets(theme: &Theme) -> BTreeSet<&'static str> {
@@ -475,9 +685,12 @@ pub fn read_entry(archive: &[u8], name: &str) -> Result<Option<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, path::Path};
 
-    use super::{local_assets, package, read_entry, response_display_value, selected_font_assets};
+    use super::{
+        archive_path_string, local_assets, package, read_entry, response_display_value,
+        secure_archived_html, selected_font_assets,
+    };
     use crate::{markdown::parse_deck, models::Theme};
 
     #[test]
@@ -544,7 +757,14 @@ mod tests {
             "fonts/licenses/LICENSE-example.txt",
         ]);
 
-        let archive = package(page, b"{}".to_vec(), directory.path(), &font_assets).unwrap();
+        let archive = package(
+            page,
+            b"{}".to_vec(),
+            directory.path(),
+            &font_assets,
+            &BTreeSet::new(),
+        )
+        .unwrap();
         let index =
             String::from_utf8(read_entry(&archive, "index.html").unwrap().unwrap()).unwrap();
 
@@ -590,5 +810,156 @@ mod tests {
                 .is_some()
         );
         assert_eq!(local_assets(&index).len(), 1);
+    }
+
+    #[test]
+    fn packages_complete_local_iframe_bundles() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.css"), "body {}").unwrap();
+        let bundle = directory.path().join("embeds/demo");
+        std::fs::create_dir_all(bundle.join("styles")).unwrap();
+        std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+        std::fs::create_dir_all(bundle.join("images")).unwrap();
+        std::fs::write(
+            bundle.join("index.html"),
+            r#"<link rel="stylesheet" href="styles/app.css"><script src="scripts/app.js"></script><img src="images/logo.png">"#,
+        )
+        .unwrap();
+        std::fs::write(bundle.join("styles/app.css"), "body { color: hotpink; }").unwrap();
+        std::fs::write(
+            bundle.join("scripts/app.js"),
+            "document.body.dataset.ready = 'yes';",
+        )
+        .unwrap();
+        std::fs::write(bundle.join("images/logo.png"), b"png").unwrap();
+        let page = r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into();
+
+        let archive = package(
+            page,
+            b"{}".to_vec(),
+            directory.path(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
+        )
+        .unwrap();
+        let index =
+            String::from_utf8(read_entry(&archive, "index.html").unwrap().unwrap()).unwrap();
+
+        assert!(index.contains("src=\"assets/embeds/demo/index.html\""));
+        let iframe_html = String::from_utf8(
+            read_entry(&archive, "assets/embeds/demo/index.html")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(iframe_html.contains("http-equiv=\"Content-Security-Policy\""));
+        assert!(iframe_html.contains("connect-src 'none'"));
+        assert!(
+            read_entry(&archive, "assets/embeds/demo/styles/app.css")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            read_entry(&archive, "assets/embeds/demo/scripts/app.js")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            read_entry(&archive, "assets/embeds/demo/images/logo.png")
+                .unwrap()
+                .unwrap(),
+            b"png"
+        );
+    }
+
+    #[test]
+    fn preserves_iframe_doctypes_after_leading_comments() {
+        let html = b"\xef\xbb\xbf<!-- License -->\n<!doctype html><html><body>Demo</body></html>";
+
+        let secured = String::from_utf8(secure_archived_html(html.to_vec()).unwrap()).unwrap();
+
+        assert!(secured.starts_with("\u{feff}<!-- License -->\n<!doctype html><head>"));
+        assert!(secured.contains("http-equiv=\"Content-Security-Policy\""));
+    }
+
+    #[test]
+    fn rejects_unsafe_iframe_archive_filenames() {
+        assert!(archive_path_string(Path::new("embeds/demo/..\\payload.txt")).is_err());
+        assert!(archive_path_string(Path::new("embeds/demo/C:payload.txt")).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_iframe_entrypoints_before_reading_them() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.css"), "body {}").unwrap();
+        let bundle = directory.path().join("embeds/demo");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let html = std::fs::File::create(bundle.join("index.html")).unwrap();
+        html.set_len(super::MAX_IFRAME_BUNDLE_BYTES + 1).unwrap();
+
+        let error = package(
+            r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
+            b"{}".to_vec(),
+            directory.path(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("exceed 100 MiB"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_in_iframe_bundles() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.css"), "body {}").unwrap();
+        let bundle = directory.path().join("embeds/demo");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("index.html"), "<!doctype html>").unwrap();
+        std::fs::write(directory.path().join("secret.txt"), "secret").unwrap();
+        symlink(
+            directory.path().join("secret.txt"),
+            bundle.join("secret.txt"),
+        )
+        .unwrap();
+
+        let error = package(
+            r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
+            b"{}".to_vec(),
+            directory.path(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("cannot contain symlinks"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_iframe_bundle_roots() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.css"), "body {}").unwrap();
+        let embeds = directory.path().join("embeds");
+        let real_bundle = embeds.join("real");
+        std::fs::create_dir_all(&real_bundle).unwrap();
+        std::fs::write(real_bundle.join("index.html"), "<!doctype html>").unwrap();
+        symlink(&real_bundle, embeds.join("demo")).unwrap();
+
+        let error = package(
+            r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
+            b"{}".to_vec(),
+            directory.path(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("roots cannot be symlinks"));
     }
 }

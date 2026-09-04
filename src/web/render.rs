@@ -140,7 +140,7 @@ pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
     };
 
     format!(
-        "<div class=\"editor-preview\" data-preview-deck data-slide-index=\"0\" style=\"{}\"><div class=\"slide-stage\">{slides}</div><nav class=\"preview-navigation\" aria-label=\"Preview slide navigation\"><button class=\"secondary\" type=\"button\" data-preview-nav=\"previous\" disabled>{}Previous</button><span class=\"preview-position\" data-preview-position aria-live=\"polite\">Slide 1 of {total}</span><button class=\"secondary\" type=\"button\" data-preview-nav=\"next\"{next_disabled}>Next{}</button></nav></div>",
+        "<div class=\"editor-preview\" data-preview-deck data-presentation-theme data-slide-index=\"0\" style=\"{}\"><div class=\"slide-stage\">{slides}</div><nav class=\"preview-navigation\" aria-label=\"Preview slide navigation\"><button class=\"secondary\" type=\"button\" data-preview-nav=\"previous\" disabled>{}Previous</button><span class=\"preview-position\" data-preview-position aria-live=\"polite\">Slide 1 of {total}</span><button class=\"secondary\" type=\"button\" data-preview-nav=\"next\"{next_disabled}>Next{}</button></nav></div>",
         encode_double_quoted_attribute(&theme.style()),
         icon("previous"),
         icon("next"),
@@ -329,7 +329,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\"><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -342,6 +342,7 @@ fn presenter_view(
         previous_icon = icon("previous"),
         attention_icon = icon("attention"),
         next_icon = icon("next"),
+        color_scheme_toggle = color_scheme_toggle(),
     )
 }
 
@@ -364,12 +365,13 @@ fn audience_view(
     let live_status = live_status(data.viewers);
     let questions = audience_questions(&session.code, &data.questions);
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div>{live_status}</nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
         slide_html = slide.html,
         hand_button = audience_hand_button(&session.code, data.hand_raised),
+        color_scheme_toggle = color_scheme_toggle(),
     )
 }
 
@@ -911,6 +913,10 @@ fn audience_hand_button(code: &str, raised: bool) -> String {
     )
 }
 
+fn color_scheme_toggle() -> &'static str {
+    "<button class=\"ghost small color-scheme-toggle\" type=\"button\" data-color-scheme-toggle aria-label=\"Change color mode\"><span data-color-scheme-icon aria-hidden=\"true\">☀</span><span data-color-scheme-label>Light mode</span></button>"
+}
+
 fn icon(name: &str) -> &'static str {
     match name {
         "previous" => {
@@ -1191,6 +1197,7 @@ mod tests {
         assert!(presenter.contains("Join code</span><strong>553675"));
         assert!(presenter.contains("Copy link"));
         assert!(presenter.contains("Live · 3 viewers"));
+        assert!(presenter.contains("data-color-scheme-toggle"));
         assert!(presenter.contains("data-presenter-notes"));
         assert!(presenter.contains("Mention <strong>ownership</strong> here."));
         assert!(!presenter.contains("Future slides locked"));
@@ -1207,10 +1214,8 @@ mod tests {
         assert!(audience.contains("class=\"nav-title\">A useful deck"));
         assert!(audience.contains("class=\"nav-position\">1/2"));
         assert!(!audience.contains("Join code"));
-        assert!(
-            audience
-                .contains("</div><span class=\"status-pill live\">Live · 3 viewers</span></nav>")
-        );
+        assert!(audience.contains("Live · 3 viewers"));
+        assert!(audience.contains("data-color-scheme-toggle"));
         assert!(audience.contains("aria-keyshortcuts=\"Alt+H\""));
         assert!(audience.contains("aria-keyshortcuts=\"Alt+1\""));
         assert!(!audience.contains("presenter-notes"));

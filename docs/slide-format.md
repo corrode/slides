@@ -15,15 +15,16 @@ Slides Markdown should be:
 - independent of a frontend framework;
 - evolvable without silently changing an existing deck.
 
-The format intentionally does not derive navigation from heading levels, execute raw HTML or JavaScript, or use list markers and image alt text as hidden presentation commands.
+The format intentionally does not derive navigation from heading levels, execute raw HTML from Markdown, or use list markers and image alt text as hidden presentation commands. Trusted local HTML bundles are available only through the restricted iframe directive described below.
 
 ## Document model
 
 A deck is UTF-8 Markdown containing one or more slides. Each slide contains:
 
 1. Markdown content;
-2. at most one interaction block; and
-3. at most one presenter notes block.
+2. zero or more local iframe blocks;
+3. at most one interaction block; and
+4. at most one presenter notes block.
 
 Reactions are a session feature and require no authoring syntax.
 
@@ -88,7 +89,24 @@ flowchart LR
 
 Slides uses the vendored Mermaid 11.17.2 browser renderer in strict security mode. Diagrams work in editor previews, presenter and audience views, print/PDF output, and downloadable session archives. The original escaped source remains visible if JavaScript is unavailable or Mermaid rejects the diagram.
 
-Mermaid blocks may coexist with an interaction or notes block and do not count toward the one-interaction-per-slide limit. Keep diagrams compact enough for a 16:9 slide. Add Mermaid's `accTitle` and `accDescr` declarations so the generated SVG has an accessible name and description. Custom scripts and raw HTML are not supported.
+Mermaid blocks may coexist with an interaction, iframe, or notes block and do not count toward the one-interaction-per-slide limit. Keep diagrams compact enough for a 16:9 slide. Add Mermaid's `accTitle` and `accDescr` declarations so the generated SVG has an accessible name and description. Custom scripts and raw HTML are not supported.
+
+### Local HTML embeds
+
+Trusted HTML pages stored below `assets/embeds/<bundle>/` can be placed on a slide with an iframe block:
+
+```markdown
+:::iframe src="/assets/embeds/demo/index.html" title="Interactive ownership demo"
+:::
+```
+
+Both attributes are required. `src` must be an `/assets/embeds/` URL with a bundle directory and an `.html` or `.htm` file; external URLs, encoded paths, backslashes, colons, empty segments, and `.` or `..` traversal are rejected. The block body must be empty. `title` must be meaningful for assistive technology and may contain at most 200 characters.
+
+Slides renders the page in a sandbox that allows scripts but does not grant same-origin access, forms, popups, downloads, top-level navigation, workers, or nested frames. Its content policy blocks cross-origin subresources and APIs such as `fetch`, WebSocket, and EventSource. An embed can still navigate its own frame to another page, so iframe bundles must be trusted local content. Embed HTML is also served with a response-level sandbox, including when opened directly, and archived copies receive an equivalent embedded content policy. Keep scripts, styles, images, fonts, and other dependencies in the same bundle and use relative URLs.
+
+Downloaded session archives include the complete bundle, up to 512 files and 100 MiB across all iframe bundles. Relative dependencies continue to work without rewriting. Module scripts may still require serving an extracted archive over HTTP rather than opening it with `file://`.
+
+Iframe blocks may appear alongside Markdown, interactions, Mermaid diagrams, and presenter notes.
 
 Raw HTML is escaped and displayed as text. It is never executed. Link and image destinations may use:
 

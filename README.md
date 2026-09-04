@@ -100,7 +100,7 @@ SQLx verifies applied migrations by checksum. Once a migration has been run anyw
 
 The normative format specification and research notes are in [`docs/slide-format.md`](docs/slide-format.md). A complete, ready-to-present showcase is available at [`examples/kitchen-sink.md`](examples/kitchen-sink.md).
 
-Decks use `---` separators, CommonMark content, fenced code blocks, Mermaid diagrams, optional `:::notes` presenter notes, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+Decks use `---` separators, CommonMark content, fenced code blocks, Mermaid diagrams, optional `:::notes` presenter notes, local `:::iframe` embeds, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
 
 Code shipped beside presentations under `examples/code/` can be included with an empty fence:
 
@@ -119,6 +119,15 @@ flowchart LR
     Draft --> Review --> Present
 ```
 ````
+
+Local HTML pages can be embedded from a self-contained bundle under `assets/embeds/`:
+
+```markdown
+:::iframe src="/assets/embeds/demo/index.html" title="Interactive demo"
+:::
+```
+
+Keep dependencies inside the same bundle and use relative URLs. The iframe is sandboxed, and the complete bounded bundle is included in session archives. See [`assets/embeds/README.md`](assets/embeds/README.md) for the directory layout and the format specification for security restrictions.
 
 Running a Rust code block sends that block's source through the Slides server to the public Rust Playground. The Slides container therefore needs outbound HTTPS access to `play.rust-lang.org`; the code runs in the Playground sandbox, not on the Slides host.
 
