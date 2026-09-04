@@ -130,6 +130,7 @@ pub async fn build(
     document: &DeckDocument,
     started_at: i64,
     ended_at: i64,
+    embed_root: &Path,
 ) -> Result<Vec<u8>> {
     let slides = render::archived_slides(pool, session, document).await?;
     let responses = sqlx::query_as::<_, StoredResponse>(
@@ -266,11 +267,13 @@ pub async fn build(
     }
     .render()?;
 
+    let embed_root = embed_root.to_owned();
     tokio::task::spawn_blocking(move || {
         package(
             page,
             audience_json,
             Path::new("assets"),
+            Some(&embed_root),
             &font_assets,
             &iframe_assets,
         )
@@ -346,11 +349,17 @@ fn package(
     mut page: String,
     audience_json: Vec<u8>,
     asset_root: &Path,
+    uploaded_embed_root: Option<&Path>,
     font_assets: &BTreeSet<&'static str>,
     iframe_assets: &BTreeSet<String>,
 ) -> Result<Vec<u8>> {
     let mut packaged_assets = BTreeMap::new();
-    package_iframe_bundles(asset_root, iframe_assets, &mut packaged_assets)?;
+    package_iframe_bundles(
+        asset_root,
+        uploaded_embed_root,
+        iframe_assets,
+        &mut packaged_assets,
+    )?;
     let mut missing_assets = Vec::new();
     for (url, path) in local_assets(&page) {
         if packaged_assets.contains_key(&path) {
@@ -415,6 +424,7 @@ const MAX_IFRAME_BUNDLE_BYTES: u64 = 100 * 1024 * 1024;
 
 fn package_iframe_bundles(
     asset_root: &Path,
+    uploaded_embed_root: Option<&Path>,
     iframe_assets: &BTreeSet<String>,
     packaged_assets: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
@@ -422,10 +432,7 @@ fn package_iframe_bundles(
         return Ok(());
     }
 
-    let canonical_root = std::fs::canonicalize(asset_root)
-        .context("could not resolve the asset directory for iframe archives")?;
-    let canonical_embeds_root = std::fs::canonicalize(asset_root.join("embeds"))
-        .context("could not resolve the iframe embed directory")?;
+    let static_embed_root = asset_root.join("embeds");
     let mut bundle_roots = BTreeSet::new();
     for asset in iframe_assets {
         let components = Path::new(asset)
@@ -444,7 +451,18 @@ fn package_iframe_bundles(
     let mut file_count = 0;
     let mut byte_count = 0;
     for bundle_root in bundle_roots {
-        let requested_source = asset_root.join(&bundle_root);
+        let bundle_name = bundle_root
+            .file_name()
+            .context("iframe bundle path has no directory name")?;
+        let (requested_source, allowed_root) = uploaded_embed_root
+            .map(|root| (root.join(bundle_name), root))
+            .filter(|(source, _)| source.exists())
+            .unwrap_or_else(|| {
+                (
+                    static_embed_root.join(bundle_name),
+                    static_embed_root.as_path(),
+                )
+            });
         if std::fs::symlink_metadata(&requested_source)?
             .file_type()
             .is_symlink()
@@ -454,13 +472,15 @@ fn package_iframe_bundles(
                 requested_source.display()
             );
         }
+        let canonical_root = std::fs::canonicalize(allowed_root)
+            .context("could not resolve the iframe embed directory")?;
         let source = std::fs::canonicalize(&requested_source).with_context(|| {
             format!(
                 "could not resolve iframe bundle {:?}",
                 bundle_root.to_string_lossy()
             )
         })?;
-        if !source.starts_with(&canonical_root) || !source.starts_with(&canonical_embeds_root) {
+        if !source.starts_with(&canonical_root) {
             bail!("iframe bundle escapes the embed directory");
         }
         collect_iframe_bundle(
@@ -569,7 +589,7 @@ fn secure_archived_html(contents: Vec<u8>) -> Result<Vec<u8>> {
     );
     let insertion_at = leading_doctype_end(&lowercase)?.unwrap_or_default();
     html.insert_str(insertion_at, &insertion);
-    Ok(html.into_bytes())
+    Ok(crate::web::add_iframe_navigation_bridge(html).into_bytes())
 }
 
 fn leading_doctype_end(html: &str) -> Result<Option<usize>> {
@@ -761,6 +781,7 @@ mod tests {
             page,
             b"{}".to_vec(),
             directory.path(),
+            None,
             &font_assets,
             &BTreeSet::new(),
         )
@@ -838,6 +859,7 @@ mod tests {
             page,
             b"{}".to_vec(),
             directory.path(),
+            None,
             &BTreeSet::new(),
             &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
         )
@@ -854,6 +876,7 @@ mod tests {
         .unwrap();
         assert!(iframe_html.contains("http-equiv=\"Content-Security-Policy\""));
         assert!(iframe_html.contains("connect-src 'none'"));
+        assert!(iframe_html.contains("data-slides-navigation-bridge"));
         assert!(
             read_entry(&archive, "assets/embeds/demo/styles/app.css")
                 .unwrap()
@@ -870,6 +893,37 @@ mod tests {
                 .unwrap(),
             b"png"
         );
+    }
+
+    #[test]
+    fn prefers_uploaded_iframe_bundles_when_archiving() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("assets");
+        let uploaded = directory.path().join("uploaded");
+        std::fs::create_dir_all(assets.join("embeds/demo")).unwrap();
+        std::fs::create_dir_all(uploaded.join("demo")).unwrap();
+        std::fs::write(assets.join("app.css"), "body {}").unwrap();
+        std::fs::write(assets.join("embeds/demo/index.html"), "Static").unwrap();
+        std::fs::write(uploaded.join("demo/index.html"), "Uploaded").unwrap();
+
+        let archive = package(
+            r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
+            b"{}".to_vec(),
+            &assets,
+            Some(&uploaded),
+            &BTreeSet::new(),
+            &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
+        )
+        .unwrap();
+        let iframe_html = String::from_utf8(
+            read_entry(&archive, "assets/embeds/demo/index.html")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(iframe_html.contains("Uploaded"));
+        assert!(!iframe_html.contains("Static"));
     }
 
     #[test]
@@ -901,6 +955,7 @@ mod tests {
             r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
             b"{}".to_vec(),
             directory.path(),
+            None,
             &BTreeSet::new(),
             &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
         )
@@ -930,6 +985,7 @@ mod tests {
             r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
             b"{}".to_vec(),
             directory.path(),
+            None,
             &BTreeSet::new(),
             &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
         )
@@ -955,6 +1011,7 @@ mod tests {
             r#"<iframe src="/assets/embeds/demo/index.html"></iframe>"#.into(),
             b"{}".to_vec(),
             directory.path(),
+            None,
             &BTreeSet::new(),
             &BTreeSet::from(["embeds/demo/index.html".to_owned()]),
         )

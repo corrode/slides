@@ -36,6 +36,7 @@ Configuration:
 - `SLIDES_ADMIN_PASSWORD`: required presenter password
 - `SLIDES_DATABASE_URL`: defaults to `sqlite://slides.db`
 - `SLIDES_BIND`: defaults to `127.0.0.1:3000`
+- `SLIDES_EMBED_DIR`: persistent uploaded iframe bundles; defaults to `data/embeds`
 - `SLIDES_SECURE_COOKIES`: set to `true` behind HTTPS
 - `RUST_LOG`: standard tracing filter
 - `SLIDES_HEALTHCHECK_URL`: Docker health-check URL; override it when changing the container's `SLIDES_BIND` port
@@ -46,15 +47,16 @@ Configuration:
 
 Sign in as the presenter and open `/admin/settings` to generate the workspace API token and view request examples. The plaintext token is shown only when generated; Slides stores only its SHA-256 hash. Regenerating or revoking it invalidates the previous token immediately.
 
-All API requests use `Authorization: Bearer <token>`. The versioned endpoints are:
+All API requests use `Authorization: Bearer <token>`. Presentation endpoints manage drafts; publishing immutable versions and starting live sessions remain presenter UI actions. The versioned endpoints are:
 
 - `GET /api/v1/presentations`
 - `POST /api/v1/presentations`
 - `GET /api/v1/presentations/{slug}`
 - `PATCH /api/v1/presentations/{slug}`
 - `DELETE /api/v1/presentations/{slug}`
+- `PUT /api/v1/embeds/{bundle}`
 
-Create and source-update requests validate the Slides Markdown before saving it. Theme objects can set `headline_font`, `text_font`, and `code_font` independently; the legacy `font` field remains accepted for compatibility. Request bodies are limited to 2 MiB, and API errors use a JSON `error.code` plus `error.message` shape. Full examples and the request schema are available on the settings page.
+Create and source-update requests validate the Slides Markdown before saving it. Theme objects can set `headline_font`, `text_font`, and `code_font` independently; the legacy `font` field remains accepted for compatibility. Presentation JSON bodies are limited to 2 MiB. Iframe bundles use ZIP request bodies limited to 20 MiB compressed and 100 MiB extracted, with a 4 MiB limit per HTML file, and are served from `/assets/embeds/{bundle}/`. Bundle names are global and replacements take effect immediately, so do not replace a bundle during a live session. API errors use a JSON `error.code` plus `error.message` shape. Full examples and the request schema are available on the settings page.
 
 Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 

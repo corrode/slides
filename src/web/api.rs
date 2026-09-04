@@ -1,12 +1,21 @@
+use std::{
+    fs,
+    io::{Cursor, Read},
+    path::{Component, Path as FilePath, PathBuf},
+};
+
+use anyhow::anyhow;
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    body::Bytes,
+    extract::{DefaultBodyLimit, FromRequestParts, Path, State, rejection::JsonRejection},
+    http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use zip::ZipArchive;
 
 use crate::{
     markdown::parse_deck,
@@ -22,6 +31,10 @@ use crate::{
 use super::{AppState, hash};
 
 const MAX_API_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EMBED_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+const MAX_EMBED_BUNDLE_FILES: usize = 512;
+const MAX_EMBED_BUNDLE_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_EMBED_HTML_BYTES: u64 = 4 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -31,6 +44,10 @@ pub fn router() -> Router<AppState> {
             get(get_one).patch(update).delete(delete),
         )
         .layer(DefaultBodyLimit::max(MAX_API_BODY_BYTES))
+        .route(
+            "/embeds/{bundle}",
+            put(upload_embed).layer(DefaultBodyLimit::max(MAX_EMBED_UPLOAD_BYTES)),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +146,14 @@ impl From<&Deck> for Presentation {
 }
 
 #[derive(Debug, Serialize)]
+struct EmbedUpload {
+    bundle: String,
+    files: usize,
+    bytes: u64,
+    url_prefix: String,
+}
+
+#[derive(Debug, Serialize)]
 struct PresentationTheme {
     font: String,
     headline_font: String,
@@ -152,6 +177,8 @@ impl From<&Deck> for PresentationTheme {
         }
     }
 }
+
+struct ApiAuthorization;
 
 #[derive(Debug)]
 struct ApiError {
@@ -212,6 +239,18 @@ impl ApiError {
     }
 }
 
+impl FromRequestParts<AppState> for ApiAuthorization {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        authorize(state, &parts.headers).await?;
+        Ok(Self)
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut response = (
@@ -233,11 +272,58 @@ impl IntoResponse for ApiError {
     }
 }
 
+async fn upload_embed(
+    State(state): State<AppState>,
+    _authorization: ApiAuthorization,
+    Path(bundle): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<EmbedUpload>), ApiError> {
+    let bundle = normalized_bundle_name(&bundle)?;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if !matches!(
+        content_type,
+        Some("application/zip" | "application/x-zip-compressed")
+    ) {
+        return Err(ApiError::validation(
+            "Embed bundles must use Content-Type: application/zip.",
+        ));
+    }
+    if body.is_empty() {
+        return Err(ApiError::validation("The embed ZIP cannot be empty."));
+    }
+
+    let embed_dir = state.embed_dir.clone();
+    let install_bundle = bundle.clone();
+    let stats = tokio::task::spawn_blocking(move || {
+        install_embed_bundle(&embed_dir, &install_bundle, body.as_ref())
+    })
+    .await
+    .map_err(|error| ApiError::internal(anyhow!(error)))?
+    .map_err(|error| match error {
+        EmbedInstallError::Invalid(message) => ApiError::validation(message),
+        EmbedInstallError::Internal(error) => ApiError::internal(error),
+    })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(EmbedUpload {
+            url_prefix: format!("/assets/embeds/{bundle}/"),
+            bundle,
+            files: stats.files,
+            bytes: stats.bytes,
+        }),
+    ))
+}
+
 async fn list(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _authorization: ApiAuthorization,
 ) -> Result<Json<PresentationList>, ApiError> {
-    authorize(&state, &headers).await?;
     let presentations = store::list_decks(&state.pool)
         .await
         .map_err(ApiError::internal)?
@@ -249,10 +335,9 @@ async fn list(
 
 async fn create(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _authorization: ApiAuthorization,
     payload: Result<Json<CreatePresentation>, JsonRejection>,
 ) -> Result<Response, ApiError> {
-    authorize(&state, &headers).await?;
     let Json(payload) = payload.map_err(ApiError::invalid_json)?;
     let title = normalized_title(&payload.title)?;
     validate_source(&payload.source)?;
@@ -288,21 +373,19 @@ async fn create(
 
 async fn get_one(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _authorization: ApiAuthorization,
     Path(slug): Path<String>,
 ) -> Result<Json<Presentation>, ApiError> {
-    authorize(&state, &headers).await?;
     let deck = required_deck(&state, &slug).await?;
     Ok(Json(Presentation::from(&deck)))
 }
 
 async fn update(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _authorization: ApiAuthorization,
     Path(slug): Path<String>,
     payload: Result<Json<UpdatePresentation>, JsonRejection>,
 ) -> Result<Json<Presentation>, ApiError> {
-    authorize(&state, &headers).await?;
     let Json(payload) = payload.map_err(ApiError::invalid_json)?;
     if payload.is_empty() {
         return Err(ApiError::validation(
@@ -341,10 +424,9 @@ async fn update(
 
 async fn delete(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _authorization: ApiAuthorization,
     Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    authorize(&state, &headers).await?;
     let deck = required_deck(&state, &slug).await?;
     if !store::delete_deck(&state.pool, deck.id)
         .await
@@ -560,9 +642,186 @@ fn valid_color(color: &str) -> bool {
         && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+#[derive(Debug)]
+struct EmbedBundleStats {
+    files: usize,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+enum EmbedInstallError {
+    Invalid(String),
+    Internal(anyhow::Error),
+}
+
+fn normalized_bundle_name(bundle: &str) -> Result<String, ApiError> {
+    let bundle = bundle.trim();
+    let valid = !bundle.is_empty()
+        && bundle.len() <= 64
+        && bundle.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
+        });
+    if !valid {
+        return Err(ApiError::validation(
+            "Embed bundle names must use 1-64 lowercase letters, numbers, or hyphens, and must start with a letter or number.",
+        ));
+    }
+    Ok(bundle.into())
+}
+
+fn install_embed_bundle(
+    embed_root: &FilePath,
+    bundle: &str,
+    bytes: &[u8],
+) -> Result<EmbedBundleStats, EmbedInstallError> {
+    fs::create_dir_all(embed_root).map_err(embed_internal)?;
+    let upload_id = rand::random::<u64>();
+    let temporary = embed_root.join(format!(".{bundle}-{upload_id:016x}.upload"));
+    let backup = embed_root.join(format!(".{bundle}-{upload_id:016x}.backup"));
+    let destination = embed_root.join(bundle);
+    fs::create_dir(&temporary).map_err(embed_internal)?;
+
+    let extraction = extract_embed_archive(bytes, &temporary);
+    let stats = match extraction {
+        Ok(stats) => stats,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+    };
+
+    if destination.exists() {
+        fs::rename(&destination, &backup).map_err(|error| {
+            let _ = fs::remove_dir_all(&temporary);
+            embed_internal(error)
+        })?;
+    }
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let restore_result = backup
+            .exists()
+            .then(|| fs::rename(&backup, &destination))
+            .transpose();
+        let _ = fs::remove_dir_all(&temporary);
+        return match restore_result {
+            Ok(_) => Err(embed_internal(error)),
+            Err(restore_error) => Err(embed_internal(anyhow!(
+                "could not activate embed bundle: {error}; restoring the previous bundle also failed: {restore_error}"
+            ))),
+        };
+    }
+    if backup.exists()
+        && let Err(error) = fs::remove_dir_all(&backup)
+    {
+        tracing::warn!(?error, path = %backup.display(), "could not remove replaced embed bundle");
+    }
+    Ok(stats)
+}
+
+fn extract_embed_archive(
+    bytes: &[u8],
+    destination: &FilePath,
+) -> Result<EmbedBundleStats, EmbedInstallError> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|_| {
+        EmbedInstallError::Invalid("The request body is not a valid ZIP archive.".into())
+    })?;
+    if archive.len() > MAX_EMBED_BUNDLE_FILES {
+        return Err(EmbedInstallError::Invalid(format!(
+            "Embed ZIPs cannot contain more than {MAX_EMBED_BUNDLE_FILES} entries."
+        )));
+    }
+    let mut stats = EmbedBundleStats { files: 0, bytes: 0 };
+    let mut contains_html = false;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|_| {
+            EmbedInstallError::Invalid("The embed ZIP contains an unreadable entry.".into())
+        })?;
+        let path = safe_embed_entry_path(entry.name())?;
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(EmbedInstallError::Invalid(
+                "Embed ZIPs cannot contain symbolic links.".into(),
+            ));
+        }
+
+        let output_path = destination.join(&path);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(embed_internal)?;
+            continue;
+        }
+
+        stats.files += 1;
+        let is_html = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+            });
+        contains_html |= is_html;
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(embed_internal)?;
+        }
+        let mut output = fs::File::create(&output_path).map_err(embed_internal)?;
+        let remaining = MAX_EMBED_BUNDLE_BYTES.saturating_sub(stats.bytes);
+        let copied = std::io::copy(&mut entry.by_ref().take(remaining + 1), &mut output)
+            .map_err(embed_internal)?;
+        if copied > remaining {
+            return Err(EmbedInstallError::Invalid(
+                "Uncompressed embed bundles cannot exceed 100 MiB.".into(),
+            ));
+        }
+        if is_html && copied > MAX_EMBED_HTML_BYTES {
+            return Err(EmbedInstallError::Invalid(
+                "Individual embed HTML files cannot exceed 4 MiB.".into(),
+            ));
+        }
+        stats.bytes += copied;
+    }
+
+    if stats.files == 0 {
+        return Err(EmbedInstallError::Invalid(
+            "The embed ZIP must contain at least one file.".into(),
+        ));
+    }
+    if !contains_html {
+        return Err(EmbedInstallError::Invalid(
+            "The embed ZIP must contain an HTML file.".into(),
+        ));
+    }
+    Ok(stats)
+}
+
+fn safe_embed_entry_path(name: &str) -> Result<PathBuf, EmbedInstallError> {
+    if name.is_empty()
+        || name.contains(['\\', ':'])
+        || name.chars().any(char::is_control)
+        || name.len() > 1024
+    {
+        return Err(EmbedInstallError::Invalid(
+            "The embed ZIP contains an unsafe filename.".into(),
+        ));
+    }
+    let path = FilePath::new(name);
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(EmbedInstallError::Invalid(
+            "The embed ZIP contains an unsafe path.".into(),
+        ));
+    }
+    Ok(path.to_owned())
+}
+
+fn embed_internal(error: impl Into<anyhow::Error>) -> EmbedInstallError {
+    EmbedInstallError::Internal(error.into())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{io::Write, sync::Arc};
 
     use axum::{
         body::{Body, to_bytes},
@@ -571,6 +830,7 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::SqlitePool;
     use tower::ServiceExt;
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     use crate::live::LiveHub;
 
@@ -589,6 +849,7 @@ mod tests {
             admin_password_hash: hash("password"),
             admin_cookie: hash("cookie"),
             secure_cookies: false,
+            embed_dir: directory.path().join("embeds"),
         };
         (directory, pool, router().with_state(state))
     }
@@ -607,6 +868,55 @@ mod tests {
     async fn json_body(response: Response) -> Value {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    fn embed_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        for (path, contents) in entries {
+            writer.start_file(*path, options).unwrap();
+            writer.write_all(contents).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[tokio::test]
+    async fn uploads_an_iframe_bundle() {
+        let (directory, _pool, app) = test_app().await;
+        let bundle = embed_zip(&[
+            (
+                "index.html",
+                b"<!doctype html><script src=\"app.js\"></script>",
+            ),
+            ("app.js", b"document.body.textContent = 'Ready';"),
+        ]);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/embeds/demo")
+                    .header(header::AUTHORIZATION, "Bearer slides_test_token")
+                    .header(header::CONTENT_TYPE, "application/zip")
+                    .body(Body::from(bundle))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = json_body(response).await;
+        assert_eq!(body["url_prefix"], "/assets/embeds/demo/");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("embeds/demo/index.html")).unwrap(),
+            "<!doctype html><script src=\"app.js\"></script>"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_embed_paths() {
+        assert!(safe_embed_entry_path("../secret.html").is_err());
+        assert!(safe_embed_entry_path("folder\\secret.html").is_err());
+        assert!(safe_embed_entry_path("/absolute.html").is_err());
     }
 
     #[tokio::test]

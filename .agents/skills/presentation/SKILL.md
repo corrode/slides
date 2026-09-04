@@ -197,18 +197,20 @@ Before responding, verify all of the following:
 
 ## Uploading to a Slides server
 
-Only upload a deck when the user explicitly asks you to upload, publish, or save it to a Slides server. Creating or revising a deck alone does not imply permission to make a network request.
+Only upload when the user explicitly asks you to upload, publish, or save the deck. Creating or revising a deck alone does not permit a network request.
 
-- Use the server URL and API token already available in the environment or conversation. If either is unavailable, ask the user for it instead of guessing.
-- Treat the API token as a secret. Send it only in the `Authorization: Bearer <token>` header, and never echo it in the response, command output, URLs, source, or logs.
-- Determine whether the target presentation already exists before writing. Use `GET /api/v1/presentations` to find a matching slug, or `GET /api/v1/presentations/{slug}` when the target slug is known.
-- Create a missing presentation with `POST /api/v1/presentations`. Update an existing presentation with `PATCH /api/v1/presentations/{slug}`; slugs are immutable.
-- Send the complete Slides Markdown document in the JSON `source` field. Include `title`, and optionally `slug` and `theme`, when creating. Include only fields that should change when updating, but never send a partial Markdown fragment as `source`.
-- Handle non-success responses without exposing credentials. Report the server's safe error message and ask for whatever action is needed.
-- After a successful upload, return a concise confirmation with the audience presentation URL (`<server-url>/<slug>`). Do not also print the raw Markdown unless the user explicitly asks for both.
+- Prefer the conventional `SLIDES_URL` and `SLIDES_API_TOKEN` environment variables, or values supplied in the conversation. If the server URL is unavailable, ask for it. If no token exists, direct the user to `<server-url>/admin/settings`; its plaintext value is shown only once.
+- Treat the token as a secret. Send it only as `Authorization: Bearer <token>` and never echo it in responses, command output, URLs, source, or logs. Send JSON requests with `Content-Type: application/json`.
+- The presentation API manages drafts only. Publishing an immutable version and starting a live session remain actions in the presenter UI.
+- Find an existing draft with `GET /api/v1/presentations` or, for a known slug, `GET /api/v1/presentations/{slug}`. Create one with `POST /api/v1/presentations`; update it with `PATCH /api/v1/presentations/{slug}`. Slugs are immutable.
+- Send the complete Slides Markdown document in `source`. Include `title`, and optionally `slug` and `theme`, on create. Never send a partial Markdown fragment as `source`. Presentation JSON requests are limited to 2 MiB.
+- Use the slug returned in the response or `Location` header; never infer the final slug from the title. `<server-url>/<slug>` is the named shortlink and waiting page, not proof that the draft has been published.
+- Presentation create/update requests upload Markdown and metadata, not referenced images or code files. Upload each local iframe bundle separately as a ZIP with `PUT /api/v1/embeds/{bundle}` and `Content-Type: application/zip`; ZIP contents are served below `/assets/embeds/{bundle}/`. ZIP requests are limited to 20 MiB compressed and 100 MiB after extraction; individual HTML files are limited to 4 MiB. Bundle names are global, and replacing a bundle takes effect immediately, so do not replace one during a live session.
+- Handle non-success responses without exposing credentials. Report only the server's safe error message and the action needed.
+- After a successful draft upload, return a concise confirmation with the shortlink and note that publishing or presenting must be done in the presenter UI. Do not print the raw Markdown unless the user asks for both.
 
 ## Output contract
 
 Unless this is an explicit upload request, return only the complete raw Slides Markdown document. Do not introduce it, explain it, summarize it, wrap it in a Markdown code fence, or append commentary. The first character of the response must belong to the first slide. This output rule applies even when the user asks for a revision.
 
-For an explicit upload request, upload the deck instead. On success, return only a concise confirmation and the presentation URL rather than the raw Markdown.
+For an explicit upload request, upload the draft instead. On success, return only a concise confirmation, the shortlink, and the required presenter-UI publication step rather than the raw Markdown.

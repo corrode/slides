@@ -329,7 +329,6 @@ pub async fn start_session(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
-    headers: HeaderMap,
     Form(form): Form<DeckForm>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
@@ -352,17 +351,7 @@ pub async fn start_session(
     )
     .await?;
     let session = store::start_session(&state.pool, deck.id, version_id).await?;
-    let location = format!("/present/{}", session.code);
-    if headers.contains_key("hx-request") {
-        let mut response = StatusCode::NO_CONTENT.into_response();
-        response.headers_mut().insert(
-            "hx-redirect",
-            HeaderValue::from_str(&location).expect("presenter path is a valid header value"),
-        );
-        Ok(response)
-    } else {
-        Ok(Redirect::to(&location).into_response())
-    }
+    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
 }
 
 fn validate_deck_form(form: &DeckForm) -> AppResult<()> {
@@ -495,7 +484,37 @@ async fn required_deck(state: &AppState, slug: &str) -> AppResult<Deck> {
 
 #[cfg(test)]
 mod tests {
-    use super::{slugify_title, validate_slug};
+    use askama::Template;
+
+    use crate::models::Deck;
+
+    use super::{EditorTemplate, slugify_title, validate_slug};
+
+    #[test]
+    fn presentation_start_uses_a_native_form_submission() {
+        let html = EditorTemplate {
+            deck: Deck {
+                id: 1,
+                slug: "demo".into(),
+                title: "Demo".into(),
+                draft_source: "# Demo".into(),
+                theme_headline_font: "inter".into(),
+                theme_text_font: "inter".into(),
+                theme_code_font: "jetbrains-mono".into(),
+                theme_background: "#282934".into(),
+                theme_text: "#e1e1e1".into(),
+                theme_accent: "#fc218a".into(),
+            },
+            active_code: None,
+            initial_notice: String::new(),
+            initial_preview: String::new(),
+        }
+        .render()
+        .unwrap();
+
+        assert!(html.contains("data-present-url=\"/admin/decks/demo/sessions\""));
+        assert!(!html.contains("hx-post=\"/admin/decks/demo/sessions\""));
+    }
 
     #[test]
     fn derives_clean_shortlinks_from_titles() {

@@ -728,6 +728,7 @@ async fn ensure_session_artifact(state: &AppState, session: &LiveSession) -> App
         &document,
         started_at,
         ended_at,
+        &state.embed_dir,
     )
     .await?;
     let token = super::random_token();

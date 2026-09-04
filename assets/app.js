@@ -386,6 +386,24 @@
     return true;
   }
 
+  function activateSlideNavigation(action) {
+    const presenter = document.querySelector(".presenter-shell");
+    const preview = document.querySelector("[data-preview-deck]");
+    if (!presenter && !preview) return false;
+    if (preview && !presenter && action === "current") {
+      showPreviewSlide(preview, 0);
+      return true;
+    }
+
+    const selector = presenter ? `[data-nav="${action}"]` : `[data-preview-nav="${action}"]`;
+    const control = document.querySelector(
+      `${selector}:not([disabled]):not([aria-disabled="true"])`,
+    );
+    if (!control) return false;
+    control.click();
+    return true;
+  }
+
   function keyboardNavigation(event) {
     const presenter = document.querySelector(".presenter-shell");
     const preview = document.querySelector("[data-preview-deck]");
@@ -407,42 +425,30 @@
     if (event.key === "ArrowRight" || event.key === "PageDown") action = "next";
     if (event.key === "Home") action = "current";
     if (event.key === " " && presenter) action = "next";
-    if (!action) return;
-    if (preview && !presenter && action === "current") {
-      event.preventDefault();
-      showPreviewSlide(preview, 0);
-      return;
-    }
-
-    const selector = presenter ? `[data-nav="${action}"]` : `[data-preview-nav="${action}"]`;
-    const control = document.querySelector(
-      `${selector}:not([disabled]):not([aria-disabled="true"])`,
-    );
-    if (!control) return;
+    if (!action || !activateSlideNavigation(action)) return;
     event.preventDefault();
-    control.click();
   }
 
-  function submitPrintView(button) {
-    const sourceForm = document.querySelector(button.dataset.printForm);
+  function submitDeckForm(button, url, target = "") {
+    const sourceForm = document.querySelector(button.dataset.deckForm);
     if (!(sourceForm instanceof HTMLFormElement) || !sourceForm.reportValidity()) return;
 
-    const printForm = document.createElement("form");
-    printForm.method = "post";
-    printForm.action = button.dataset.printUrl;
-    printForm.target = "_blank";
-    printForm.hidden = true;
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = url;
+    form.target = target;
+    form.hidden = true;
     new FormData(sourceForm).forEach((value, name) => {
       if (typeof value !== "string") return;
       const field = document.createElement("input");
       field.type = "hidden";
       field.name = name;
       field.value = value;
-      printForm.append(field);
+      form.append(field);
     });
-    document.body.append(printForm);
-    printForm.submit();
-    printForm.remove();
+    document.body.append(form);
+    form.submit();
+    form.remove();
   }
 
   async function copyText(value) {
@@ -450,8 +456,12 @@
       await navigator.clipboard.writeText(value);
       return;
     }
+    const previousFocus = document.activeElement;
     const input = document.createElement("textarea");
     input.value = value;
+    input.readOnly = true;
+    input.tabIndex = -1;
+    input.setAttribute("aria-hidden", "true");
     input.style.position = "fixed";
     input.style.opacity = "0";
     document.body.append(input);
@@ -460,6 +470,7 @@
       if (!document.execCommand("copy")) throw new Error("Clipboard copy failed");
     } finally {
       input.remove();
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
     }
   }
 
@@ -621,15 +632,31 @@
 
       const toolbar = document.createElement("div");
       toolbar.className = "playground-toolbar";
-      const label = document.createElement("span");
-      label.textContent = "Rust Playground";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "secondary small";
-      button.dataset.playgroundRun = "";
-      button.title = "Run this code on play.rust-lang.org";
-      button.innerHTML = '<span aria-hidden="true">▶</span> Run';
-      toolbar.append(label, button);
+      toolbar.setAttribute("role", "group");
+      toolbar.setAttribute("aria-label", "Code actions");
+
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "secondary icon-only";
+      copyButton.dataset.playgroundCopy = "";
+      copyButton.title = "Copy code";
+      copyButton.setAttribute("aria-label", "Copy code");
+      copyButton.innerHTML = '<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1"/></svg>';
+
+      const runButton = document.createElement("button");
+      runButton.type = "button";
+      runButton.className = "secondary icon-only";
+      runButton.dataset.playgroundRun = "";
+      runButton.title = "Run code on play.rust-lang.org";
+      runButton.setAttribute("aria-label", "Run code on play.rust-lang.org");
+      runButton.innerHTML = '<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>';
+      toolbar.append(copyButton, runButton);
+
+      const copyStatus = document.createElement("span");
+      copyStatus.className = "visually-hidden";
+      copyStatus.dataset.playgroundCopyStatus = "";
+      copyStatus.setAttribute("role", "status");
+      copyStatus.setAttribute("aria-live", "polite");
 
       const result = document.createElement("div");
       result.className = "playground-result";
@@ -645,14 +672,35 @@
       output.tabIndex = 0;
       result.append(status, output);
 
-      block.prepend(toolbar);
+      block.prepend(toolbar, copyStatus);
       block.append(result);
     });
   }
 
+  function rustCodeSource(button) {
+    return button
+      .closest("[data-rust-code]")
+      ?.querySelector(":scope > pre:not([data-playground-output])")?.textContent;
+  }
+
+  async function copyRustCode(button) {
+    const source = rustCodeSource(button);
+    const status = button
+      .closest("[data-rust-code]")
+      ?.querySelector("[data-playground-copy-status]");
+    if (source == null || !status) return;
+
+    try {
+      await copyText(source);
+      status.textContent = "Code copied.";
+    } catch {
+      status.textContent = "Could not copy the code.";
+    }
+  }
+
   async function runRustCode(button) {
     const block = button.closest("[data-rust-code]");
-    const source = block?.querySelector(":scope > pre:not([data-playground-output])")?.textContent;
+    const source = rustCodeSource(button);
     const result = block?.querySelector("[data-playground-result]");
     const status = block?.querySelector("[data-playground-status]");
     const output = block?.querySelector("[data-playground-output]");
@@ -788,6 +836,19 @@
     if (!keyboardAudienceAction(event)) keyboardNavigation(event);
   });
 
+  window.addEventListener("message", (event) => {
+    if (
+      event.data?.type !== "slides:navigate" ||
+      !["previous", "next", "current"].includes(event.data.action)
+    ) {
+      return;
+    }
+    const sourceIsSlideIframe = [...document.querySelectorAll(".slide-iframe")].some(
+      (iframe) => iframe.contentWindow === event.source,
+    );
+    if (sourceIsSlideIframe) activateSlideNavigation(event.data.action);
+  });
+
   window.addEventListener("hashchange", () => {
     const deck = document.querySelector("[data-preview-deck]");
     const index = previewIndexFromUrl();
@@ -837,7 +898,12 @@
     }
     const openPrint = event.target.closest("[data-print-url]");
     if (openPrint) {
-      submitPrintView(openPrint);
+      submitDeckForm(openPrint, openPrint.dataset.printUrl, "_blank");
+      return;
+    }
+    const startPresentation = event.target.closest("[data-present-url]");
+    if (startPresentation) {
+      submitDeckForm(startPresentation, startPresentation.dataset.presentUrl);
       return;
     }
     const previewControl = event.target.closest("[data-preview-nav]");
@@ -857,6 +923,11 @@
     const copyValue = event.target.closest("[data-copy-target]");
     if (copyValue) {
       copyElementValue(copyValue);
+      return;
+    }
+    const playgroundCopy = event.target.closest("[data-playground-copy]");
+    if (playgroundCopy) {
+      copyRustCode(playgroundCopy);
       return;
     }
     const playgroundRun = event.target.closest("[data-playground-run]");

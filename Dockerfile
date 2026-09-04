@@ -38,6 +38,7 @@ COPY --link examples ./examples
 
 ENV SLIDES_BIND=0.0.0.0:3000 \
     SLIDES_DATABASE_URL=sqlite://data/slides.db \
+    SLIDES_EMBED_DIR=data/embeds \
     SLIDES_HEALTHCHECK_URL=http://127.0.0.1:3000/healthz \
     RUST_LOG=slides=info,tower_http=info
 

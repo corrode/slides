@@ -323,28 +323,33 @@ fn extract_directives(source: &str) -> Result<ExtractedSlide> {
             continue;
         }
 
-        let header = line.to_owned();
+        let inline_header = is_iframe
+            .then_some(line)
+            .and_then(self_closing_directive_header);
+        let header = inline_header.unwrap_or(line).to_owned();
         let mut body = Vec::new();
-        let mut body_fence = None;
         index += 1;
-        while index < lines.len()
-            && (inside_fence(lines[index], &mut body_fence)
-                || directive_line(lines[index]) != Some(":::"))
-        {
-            body.push(lines[index]);
+        if inline_header.is_none() {
+            let mut body_fence = None;
+            while index < lines.len()
+                && (inside_fence(lines[index], &mut body_fence)
+                    || directive_line(lines[index]) != Some(":::"))
+            {
+                body.push(lines[index]);
+                index += 1;
+            }
+            if index == lines.len() {
+                let name = if is_notes {
+                    "presenter notes"
+                } else if is_iframe {
+                    "iframe"
+                } else {
+                    "interactive"
+                };
+                bail!("{name} block is missing its closing :::");
+            }
             index += 1;
         }
-        if index == lines.len() {
-            let name = if is_notes {
-                "presenter notes"
-            } else if is_iframe {
-                "iframe"
-            } else {
-                "interactive"
-            };
-            bail!("{name} block is missing its closing :::");
-        }
-        index += 1;
 
         if is_notes {
             if header != ":::notes" {
@@ -399,6 +404,10 @@ fn directive_name(line: &str) -> Option<&str> {
     line.strip_prefix(":::")?.split_whitespace().next()
 }
 
+fn self_closing_directive_header(line: &str) -> Option<&str> {
+    line.strip_suffix(" :::")
+}
+
 fn interaction_kind(line: &str) -> Option<&'static str> {
     match directive_name(line)? {
         "poll" => Some("poll"),
@@ -410,10 +419,14 @@ fn interaction_kind(line: &str) -> Option<&'static str> {
 }
 
 fn parse_iframe(header: &str, body: &[&str]) -> Result<IframeSpec> {
-    let arguments = parse_arguments(header, &["src", "title"], &[])?;
-    if body.iter().any(|line| !line.trim().is_empty()) {
-        bail!("an iframe block cannot contain body content");
-    }
+    let arguments = parse_arguments(
+        &std::iter::once(header)
+            .chain(body.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" "),
+        &["src", "title"],
+        &[],
+    )?;
 
     let src = arguments
         .attribute("src")
@@ -976,6 +989,21 @@ mod tests {
         assert!(!slide.html.contains("allow-same-origin"));
         assert_eq!(slide.iframe_assets, ["embeds/demo/index.html"]);
         assert!(slide.interaction.is_some());
+    }
+
+    #[test]
+    fn accepts_wrapped_and_self_closing_iframe_directives() {
+        for source in [
+            "# Architecture under review\n\n:::iframe src=\"/assets/embeds/kgdb-architecture/index.html\"\ntitle=\"Interactive KGDB application architecture\"\n:::",
+            "# Architecture under review\n\n:::iframe src=\"/assets/embeds/kgdb-architecture/index.html\" title=\"Interactive KGDB application architecture\" :::",
+        ] {
+            let deck = parse_deck(source).unwrap();
+            let slide = &deck.slides[0];
+
+            assert!(slide.html.contains("<iframe"));
+            assert!(!slide.html.contains(":::iframe"));
+            assert_eq!(slide.iframe_assets, ["embeds/kgdb-architecture/index.html"]);
+        }
     }
 
     #[test]

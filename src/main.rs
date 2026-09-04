@@ -39,6 +39,7 @@ async fn serve() -> Result<()> {
     let database_url =
         env::var("SLIDES_DATABASE_URL").unwrap_or_else(|_| "sqlite://slides.db".into());
     let bind_address = env::var("SLIDES_BIND").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let embed_dir = env::var("SLIDES_EMBED_DIR").unwrap_or_else(|_| "data/embeds".into());
     let admin_password = env::var("SLIDES_ADMIN_PASSWORD")
         .map_err(|_| anyhow::anyhow!("SLIDES_ADMIN_PASSWORD is required to start the server"))?;
     if admin_password.is_empty() {
@@ -47,6 +48,7 @@ async fn serve() -> Result<()> {
     let secure_cookies = env::var("SLIDES_SECURE_COOKIES")
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
 
+    std::fs::create_dir_all(&embed_dir)?;
     let pool = store::connect(&database_url).await?;
     let session_secret = web::random_token();
     let state = AppState {
@@ -55,6 +57,7 @@ async fn serve() -> Result<()> {
         admin_password_hash: web::hash(&admin_password),
         admin_cookie: web::hash(&session_secret),
         secure_cookies,
+        embed_dir: embed_dir.into(),
     };
     let app = web::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;

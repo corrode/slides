@@ -40,6 +40,12 @@ const UPDATE_CURL_EXAMPLE: &str = r##"curl --fail-with-body \
   --header "Authorization: Bearer $SLIDES_API_TOKEN" \
   --header "Content-Type: application/json" \
   --data '{"source":"# Revised deck\n\nUpdated content."}'"##;
+const UPLOAD_EMBED_CURL_EXAMPLE: &str = r#"curl --fail-with-body \
+  --request PUT \
+  --url "$SLIDES_URL/api/v1/embeds/demo" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/zip" \
+  --data-binary @demo.zip"#;
 
 #[derive(Template)]
 #[template(path = "settings.html")]
@@ -50,6 +56,7 @@ struct SettingsTemplate {
     create_json_example: String,
     create_curl_example: String,
     update_curl_example: String,
+    upload_embed_curl_example: String,
 }
 
 pub async fn page(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
@@ -81,6 +88,7 @@ async fn render_settings(state: &AppState, revealed_token: Option<String>) -> Ap
         create_json_example: highlight_code("json", CREATE_JSON_EXAMPLE),
         create_curl_example: highlight_code("sh", CREATE_CURL_EXAMPLE),
         update_curl_example: highlight_code("sh", UPDATE_CURL_EXAMPLE),
+        upload_embed_curl_example: highlight_code("sh", UPLOAD_EMBED_CURL_EXAMPLE),
     })?;
     response
         .headers_mut()
@@ -109,6 +117,7 @@ mod tests {
             admin_password_hash: hash("password"),
             admin_cookie: hash("cookie"),
             secure_cookies: false,
+            embed_dir: directory.path().join("embeds"),
         };
         (directory, state)
     }

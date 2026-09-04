@@ -66,28 +66,35 @@
       <section class="panel api-docs" aria-labelledby="api-docs-title">
         <p class="eyebrow">API v1</p>
         <h2 id="api-docs-title">Use the API</h2>
-        <p>Send the token as a bearer credential with every request:</p>
+        <p>Use <code>SLIDES_URL</code> for the server URL and <code>SLIDES_API_TOKEN</code> for this bearer credential:</p>
         {{ authorization_example|safe }}
 
         <h3>Endpoints</h3>
         <dl class="api-endpoints">
           <div><dt><code>GET /api/v1/presentations</code></dt><dd>List presentations.</dd></div>
-          <div><dt><code>POST /api/v1/presentations</code></dt><dd>Create a presentation.</dd></div>
+          <div><dt><code>POST /api/v1/presentations</code></dt><dd>Create a presentation draft.</dd></div>
           <div><dt><code>GET /api/v1/presentations/{slug}</code></dt><dd>Read a presentation and its Markdown source.</dd></div>
           <div><dt><code>PATCH /api/v1/presentations/{slug}</code></dt><dd>Update its title, source, or theme. Slugs are immutable.</dd></div>
           <div><dt><code>DELETE /api/v1/presentations/{slug}</code></dt><dd>Delete it unless a live session is active.</dd></div>
+          <div><dt><code>PUT /api/v1/embeds/{bundle}</code></dt><dd>Create or replace a local iframe bundle from a ZIP file.</dd></div>
         </dl>
 
-        <h3>Upload a presentation</h3>
+        <h3>Upload a presentation draft</h3>
         <p>Save the generated deck as <code>presentation.json</code>:</p>
         {{ create_json_example|safe }}
         {{ create_curl_example|safe }}
-        <p>The <code>slug</code> and <code>theme</code> fields are optional. If omitted, the server derives a unique slug and uses the default theme.</p>
+        <p>The <code>slug</code> and <code>theme</code> fields are optional. If omitted, the server derives a unique slug and uses the default theme. Use the slug returned in the response or <code>Location</code> header. Publishing and starting a session remain presenter UI actions.</p>
         <p>Headline fonts: <code>inter</code>, <code>bebas-neue</code>, <code>happy</code>, <code>merriweather</code>, <code>system</code>, <code>georgia</code>, <code>jetbrains-mono</code>, or <code>system-mono</code>. Text fonts support the same choices except <code>bebas-neue</code>. Code fonts: <code>jetbrains-mono</code> or <code>system-mono</code>. The legacy <code>font</code> field still accepts <code>system</code>, <code>serif</code>, or <code>mono</code>.</p>
 
         <h3>Update Markdown</h3>
         {{ update_curl_example|safe }}
-        <p>Create and source updates validate Slides Markdown before saving. JSON errors include a stable <code>error.code</code> and human-readable <code>error.message</code>.</p>
+        <p>Create and source updates validate Slides Markdown before saving. Presentation JSON bodies are limited to 2 MiB.</p>
+
+        <h3>Upload a local iframe bundle</h3>
+        <p>ZIP the contents of the bundle so its HTML entry point is inside the archive, then upload it under the same bundle name used in <code>/assets/embeds/&lt;bundle&gt;/…</code>:</p>
+        {{ upload_embed_curl_example|safe }}
+        <p>ZIP uploads are limited to 20 MiB compressed, 512 entries, 100 MiB extracted, and 4 MiB per HTML file. Bundles must contain an HTML file and cannot contain symbolic links or unsafe paths. Bundle names are global; replacements take effect immediately, so avoid replacing one during a live session.</p>
+        <p>JSON errors include a stable <code>error.code</code> and human-readable <code>error.message</code>.</p>
       </section>
     </div>
   </main>

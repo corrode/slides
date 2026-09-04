@@ -1590,15 +1590,6 @@ button.small {
   padding: 0;
 }
 
-.slide-content:has(> p:first-child > img:only-child)::after {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  background: linear-gradient(180deg, transparent 45%, rgb(0 0 0 / 75%));
-  content: "";
-  pointer-events: none;
-}
-
 .slide-content:has(> p:first-child > img:only-child) > p:first-child {
   position: absolute;
   inset: 0;
@@ -1794,6 +1785,7 @@ pre code {
 }
 
 .rust-code {
+  position: relative;
   width: 100%;
   min-width: 0;
 }
@@ -1803,22 +1795,36 @@ pre code {
 }
 
 .playground-toolbar {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 1rem;
+  inset-inline-end: 0.5rem;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  color: var(--muted-strong);
-  font-family: var(--font-mono);
-  font-size: 0.72em;
-  font-weight: 700;
+  gap: 0.35rem;
 }
 
 .playground-toolbar button {
-  width: auto;
-  min-height: 2rem;
+  min-height: 2.25rem;
   flex: 0 0 auto;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.9em;
+  border-color: rgb(255 255 255 / 25%);
+  background: rgb(17 17 27 / 88%);
+  color: #fff;
+  box-shadow: 0 0.2rem 0.8rem rgb(0 0 0 / 22%);
+  backdrop-filter: blur(0.35rem);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playground-toolbar {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+
+  .rust-code:hover > .playground-toolbar,
+  .rust-code:focus-within > .playground-toolbar {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .playground-result {
