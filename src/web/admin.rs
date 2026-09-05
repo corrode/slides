@@ -512,7 +512,10 @@ mod tests {
         .render()
         .unwrap();
 
-        assert!(html.contains("data-present-url=\"/admin/decks/demo/sessions\""));
+        assert!(html.contains(
+            "type=\"submit\" formmethod=\"post\" formaction=\"/admin/decks/demo/sessions\""
+        ));
+        assert!(!html.contains("data-present-url"));
         assert!(!html.contains("hx-post=\"/admin/decks/demo/sessions\""));
     }
 

@@ -931,11 +931,7 @@
       submitDeckForm(openPrint, openPrint.dataset.printUrl, "_blank");
       return;
     }
-    const startPresentation = event.target.closest("[data-present-url]");
-    if (startPresentation) {
-      submitDeckForm(startPresentation, startPresentation.dataset.presentUrl);
-      return;
-    }
+
     const previewControl = event.target.closest("[data-preview-nav]");
     if (previewControl) {
       const deck = previewControl.closest("[data-preview-deck]");
