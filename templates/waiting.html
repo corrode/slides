@@ -8,14 +8,15 @@
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/app.js" defer></script>
 </head>
-<body data-presentation-theme style="{{ theme_style }}">
+<body data-presentation-theme data-session-wait-url="/{{ slug }}" style="{{ theme_style }}">
   <header class="topbar"><a class="brand" href="/">Slides</a><div><button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span data-color-scheme-label>Light mode</span></button></div></header>
   <main class="audience-shell">
     <section class="interaction waiting-state">
       <p class="status-pill">Not live yet</p>
       <h1>{{ title }}</h1>
-      <p>The presenter has not started this presentation. Select “Check again” when they are ready.</p>
-      <a class="button secondary" href="/{{ slug }}"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v6h-6"/></svg>Check again</a>
+      <p>The presenter has not started this presentation yet. This page checks automatically.</p>
+      <p class="waiting-progress" role="status" data-wait-status><span aria-hidden="true"></span><span data-wait-message>Waiting for the presenter…</span></p>
+      <a class="button secondary" href="/{{ slug }}"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v6h-6"/></svg>Check now</a>
     </section>
   </main>
 </body>

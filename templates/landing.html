@@ -4,26 +4,40 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Join a presentation · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
 </head>
-<body>
+<body class="landing-page">
   <header class="topbar">
     <a class="brand" href="/">Slides</a>
-    <a class="button ghost small" href="/admin"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg>Presenter</a>
+    <nav class="topbar-actions" aria-label="Site navigation">
+      <button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span class="topbar-action-label" data-color-scheme-label>Light mode</span></button>
+      <a class="button ghost small" href="/admin"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg><span class="topbar-action-label">Presenter</span></a>
+    </nav>
   </header>
-  <main class="shell">
+  <main class="shell landing-shell">
     <div class="landing-grid landing-hero">
-      <section>
+      <section class="landing-copy" aria-labelledby="landing-title">
         <p class="eyebrow">Interactive presentations</p>
-        <h1>Join the room.</h1>
-        <p class="landing-intro">Follow along, answer questions, and react from any browser.</p>
+        <h1 id="landing-title">Be part of the presentation.</h1>
+        <p class="landing-intro">Follow the slides, answer live questions, and share feedback from any browser. No account or app required.</p>
+        <ul class="landing-benefits" aria-label="Audience features">
+          <li><span aria-hidden="true">✓</span> Stay in sync with the presenter</li>
+          <li><span aria-hidden="true">✓</span> Respond and ask questions anonymously</li>
+          <li><span aria-hidden="true">✓</span> Works on phones, tablets, and laptops</li>
+        </ul>
       </section>
-      <section class="panel">
-        <h2>Enter the presentation code</h2>
-        <form method="post" action="/join">
-          <label>Six-digit code
-            <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="482731" required autofocus autocomplete="one-time-code">
-          </label>
+      <section class="panel join-panel" aria-labelledby="join-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Join live</p>
+          <h2 id="join-title">Enter your room code</h2>
+          <p>Your presenter will share a six-digit code.</p>
+        </div>
+        <form class="join-form" method="post" action="/join">
+          <label for="join-code">Presentation code</label>
+          <input id="join-code" class="session-code-input" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="482731" required autofocus autocomplete="one-time-code" enterkeyhint="go" aria-describedby="join-code-help">
+          <small id="join-code-help">Enter all six digits with no spaces.</small>
           <button type="submit">Join presentation<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
         </form>
       </section>

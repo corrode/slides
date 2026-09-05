@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Your presentations · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
   <script src="/assets/app.js" defer></script>
@@ -11,64 +12,95 @@
 <body class="admin-page">
   <header class="topbar admin-topbar">
     <a class="brand" href="/admin">Slides</a>
-    <nav aria-label="Admin navigation">
-      <a class="button ghost small" href="/admin/settings">API settings</a>
-      <a class="button ghost small" href="/"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2"/></svg>Audience</a>
+    <nav class="topbar-actions" aria-label="Admin navigation">
+      <a class="button ghost small" aria-current="page" href="/admin">Presentations</a>
+      <a class="button ghost small" href="/admin/settings">API</a>
+      <button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span class="topbar-action-label" data-color-scheme-label>Light mode</span></button>
+      <a class="button ghost small" href="/"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2"/></svg><span class="topbar-action-label">Audience</span></a>
     </nav>
   </header>
 
   <main class="admin-shell">
-    <header class="admin-heading">
-      <p class="eyebrow">Workspace</p>
-      <h1>Presentations</h1>
-      <p>Create a deck or continue working on an existing presentation.</p>
+    <header class="admin-heading admin-heading-row">
+      <div>
+        <p class="eyebrow">Workspace</p>
+        <h1>Presentations</h1>
+        <p>Create a deck or continue where you left off.</p>
+      </div>
+      <button type="button" popovertarget="create-presentation"><span aria-hidden="true">＋</span> New presentation</button>
     </header>
 
-    <ul class="presentation-grid">
-      <li>
-        <button class="new-presentation-card" type="button" popovertarget="create-presentation">
-          <span class="new-presentation-icon" aria-hidden="true">+</span>
-          <span>
-            <strong>New presentation</strong>
-            <small>Start with a blank Markdown deck</small>
-          </span>
-        </button>
-      </li>
+    {% if !decks.is_empty() %}
+    <div class="collection-toolbar">
+      <label class="search-field" for="presentation-search">
+        <span class="visually-hidden">Search presentations</span>
+        <svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="presentation-search" type="search" placeholder="Search presentations" autocomplete="off" data-deck-filter>
+      </label>
+      <span class="collection-count" data-deck-filter-status role="status">{{ decks.len() }} presentations</span>
+    </div>
+    {% endif %}
+
+    <ul class="presentation-grid" data-deck-list>
       {% for deck in decks %}
-      <li class="presentation-card-item">
-        <a class="presentation-card" href="/admin/decks/{{ deck.slug }}/edit">
-          <span class="presentation-preview" aria-hidden="true">
-            <span class="presentation-preview-kicker">Presentation</span>
-            <strong>{{ deck.title }}</strong>
-          </span>
-          <span class="presentation-card-body">
-            <span class="presentation-card-title">
-              <span>
-                <strong>{{ deck.title }}</strong>
-                <small>/{{ deck.slug }}</small>
+      <li class="presentation-card-item" data-deck-card data-search-text="{{ deck.title }} {{ deck.slug }}">
+        <article class="presentation-card">
+          <a class="presentation-card-link" href="/admin/decks/{{ deck.slug }}/edit" aria-label="Edit {{ deck.title }}">
+            <span class="presentation-preview" aria-hidden="true">
+              <span class="presentation-preview-kicker">Presentation</span>
+              <strong>{{ deck.title }}</strong>
+            </span>
+            <span class="presentation-card-body">
+              <span class="presentation-card-title">
+                <span>
+                  <strong>{{ deck.title }}</strong>
+                  <small>/{{ deck.slug }}</small>
+                </span>
+                <span class="presentation-card-arrow" aria-hidden="true">↗</span>
               </span>
-              <span class="presentation-card-arrow" aria-hidden="true">↗</span>
+              <span class="presentation-card-meta">
+                <span>{{ deck.published_versions }} published</span>
+                {% match deck.active_code %}
+                  {% when Some with (code) %}<span class="status-pill live">Live · {{ code }}</span>
+                  {% when None %}<span class="status-pill">Draft</span>
+                {% endmatch %}
+              </span>
             </span>
-            <span class="presentation-card-meta">
-              <span>{{ deck.published_versions }} published</span>
-              {% match deck.active_code %}
-                {% when Some with (code) %}<span class="status-pill live">Live · {{ code }}</span>
-                {% when None %}<span class="status-pill">Draft</span>
-              {% endmatch %}
-            </span>
-          </span>
-        </a>
-        {% match deck.active_code %}
-          {% when Some with (code) %}
-            <button class="presentation-delete-button danger small icon-only" type="button" disabled aria-label="End live session {{ code }} before deleting {{ deck.title }}" title="End the live session before deleting this presentation"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6"/></svg></button>
-          {% when None %}
-            <form class="presentation-delete-form" method="post" action="/admin/decks/{{ deck.slug }}/delete" data-confirm="Delete “{{ deck.title }}” and all of its published versions, sessions, responses, and archives? This cannot be undone.">
-              <button class="presentation-delete-button danger small icon-only" type="submit" aria-label="Delete {{ deck.title }}" title="Delete presentation"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6"/></svg></button>
-            </form>
-        {% endmatch %}
+          </a>
+          <footer class="presentation-card-actions">
+            <a class="button secondary small" href="/admin/decks/{{ deck.slug }}/edit">Edit deck</a>
+            {% match deck.active_code %}
+              {% when Some with (code) %}<a class="button small" href="/present/{{ code }}">Present</a>
+              {% when None %}
+            {% endmatch %}
+            <details class="context-menu">
+              <summary class="button ghost small icon-only" aria-label="More actions for {{ deck.title }}" title="More actions"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary>
+              <div class="context-menu-panel">
+                <a href="/{{ deck.slug }}" target="_blank" rel="noopener">Open audience link</a>
+                {% match deck.active_code %}
+                  {% when Some with (code) %}<p>End live session {{ code }} before deleting this deck.</p>
+                  {% when None %}
+                    <form method="post" action="/admin/decks/{{ deck.slug }}/delete" data-confirm="Delete “{{ deck.title }}” and all of its published versions, sessions, responses, and archives? This cannot be undone.">
+                      <button class="danger small" type="submit">Delete presentation</button>
+                    </form>
+                {% endmatch %}
+              </div>
+            </details>
+          </footer>
+        </article>
       </li>
       {% endfor %}
     </ul>
+    {% if decks.is_empty() %}
+    <section class="empty-state dashboard-empty-state">
+      <div>
+        <h2>Create your first presentation</h2>
+        <p>Write slides in Markdown, preview as you type, and start a live room when you are ready.</p>
+        <button type="button" popovertarget="create-presentation">New presentation</button>
+      </div>
+    </section>
+    {% endif %}
+    <p class="empty-search-state" data-deck-empty hidden>No presentations match your search.</p>
 
     {% if !ended_sessions.is_empty() %}
     <section class="ended-sessions" aria-labelledby="ended-sessions-title">
@@ -111,7 +143,7 @@
       <button class="popover-close ghost" type="button" popovertarget="create-presentation" popovertargetaction="hide" aria-label="Close">×</button>
     </header>
     <div id="create-error" role="alert"></div>
-    <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error">
+    <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error" hx-disable="find button">
       <label>Title
         <input name="title" placeholder="Rust without the guesswork" required maxlength="120" autofocus>
       </label>

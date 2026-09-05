@@ -296,7 +296,7 @@ pub async fn events(
                 }
                 Err(error) => {
                     tracing::warn!(error = ?error, code = %stream_code, "could not render live update");
-                    ("<div id=\"live-error\" class=\"notice error\" hx-swap-oob=\"outerHTML\">Could not apply the latest live update. The next update will retry automatically.</div>".into(), true)
+                    ("<div id=\"live-error\" class=\"notice error\" role=\"alert\" aria-live=\"assertive\" hx-swap-oob=\"outerHTML\">Could not apply the latest live update. The next update will retry automatically.</div>".into(), true)
                 }
             };
             yield Ok::<Event, Infallible>(Event::default().data(fragment));

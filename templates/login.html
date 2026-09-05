@@ -4,19 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Presenter sign in · Slides</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
 </head>
-<body>
-  <header class="topbar"><a class="brand" href="/">Slides</a></header>
-  <main class="shell">
-    <section class="panel" style="max-width:30rem;margin:8vh auto 0">
-      <h1>Presenter sign in</h1>
-      <p>Use the password configured for this installation.</p>
+<body class="auth-page">
+  <header class="topbar">
+    <a class="brand" href="/">Slides</a>
+    <div class="topbar-actions"><button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span class="topbar-action-label" data-color-scheme-label>Light mode</span></button></div>
+  </header>
+  <main class="shell auth-shell">
+    <section class="panel auth-panel" aria-labelledby="login-title">
+      <div class="panel-heading">
+        <p class="eyebrow">Presenter workspace</p>
+        <h1 id="login-title">Welcome back</h1>
+        <p>Sign in with the password configured for this Slides installation.</p>
+      </div>
       {% match error %}{% when Some with (message) %}<div class="notice error" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
       <form method="post" action="/admin/login">
-        <label>Password <input type="password" name="password" required autofocus autocomplete="current-password"></label>
+        <label for="presenter-password">Password</label>
+        <input id="presenter-password" type="password" name="password" required autofocus autocomplete="current-password">
         <button type="submit">Sign in</button>
       </form>
+      <a class="auth-back-link" href="/">Join as an audience member</a>
     </section>
   </main>
 </body>

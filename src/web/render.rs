@@ -42,13 +42,15 @@ pub fn printable(document: &DeckDocument) -> String {
     document
         .slides
         .iter()
-        .map(|slide| {
+        .enumerate()
+        .map(|(index, slide)| {
             let mut body = slide.html.clone();
             if let Some(interaction) = &slide.interaction {
                 body.push_str(&preview_interaction(interaction));
             }
             format!(
-                "<article class=\"print-slide\"><div class=\"slide-content\">{body}</div></article>"
+                "<article class=\"print-slide\" aria-label=\"Slide {}\"><div class=\"slide-content\">{body}</div></article>",
+                index + 1
             )
         })
         .collect()
@@ -78,7 +80,8 @@ pub async fn archived_slides(
             })
             .unwrap_or_default();
         slides.push_str(&format!(
-            "<article class=\"archive-slide\"><div class=\"slide-content\">{}{interaction}{}</div></article>",
+            "<article class=\"archive-slide\" aria-label=\"Slide {}\"><div class=\"slide-content\">{}{interaction}{}</div></article>",
+            index + 1,
             slide.html,
             archived_reactions(&data.reactions),
         ));
@@ -129,7 +132,8 @@ pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
             let active = if index == 0 { " active" } else { "" };
             let current = if index == 0 { "true" } else { "false" };
             format!(
-                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\"><div class=\"slide-content\">{body}</div></article>"
+                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\" aria-label=\"Slide {}\"><div class=\"slide-content\">{body}</div></article>",
+                index + 1
             )
         })
         .collect::<String>();
@@ -156,7 +160,7 @@ pub async fn live(
     request: LiveRequest<'_>,
 ) -> Result<String> {
     if session.ended_at.is_some() {
-        return Ok("<main id=\"live-view\" class=\"audience-shell\"><section class=\"interaction\" style=\"text-align:center\"><p class=\"status-pill\">Session ended</p><h1>Thanks for taking part.</h1><p>The presenter has ended this presentation.</p></section></main>".into());
+        return Ok("<main id=\"live-view\" class=\"audience-shell\"><section class=\"interaction session-complete-state\"><p class=\"status-pill success\">Session ended</p><h1>Thanks for taking part.</h1><p>The presenter has ended this presentation.</p><a class=\"button secondary\" href=\"/\">Join another presentation</a></section></main>".into());
     }
 
     let current = (session.current_slide as usize).min(document.slides.len().saturating_sub(1));
@@ -317,7 +321,7 @@ fn presenter_view(
             "Open voting"
         };
         format!(
-            "<form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{}\"><button class=\"secondary small\" type=\"submit\">{}{}</button></form><form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"reveal\"><button class=\"secondary small\" type=\"submit\">{}Reveal</button></form>",
+            "<form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\" hx-disable=\"find button\"><input type=\"hidden\" name=\"action\" value=\"{}\"><button class=\"secondary small\" type=\"submit\">{}{}</button></form><form class=\"inline-form\" hx-post=\"/sessions/{}/interaction\" hx-swap=\"none\" hx-disable=\"find button\"><input type=\"hidden\" name=\"action\" value=\"reveal\"><button class=\"secondary small\" type=\"submit\">{}Reveal</button></form>",
             session.code,
             action,
             icon("responses"),
@@ -334,7 +338,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" hx-disable=\"this\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" hx-disable=\"this\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" hx-disable=\"this\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" hx-disable=\"this\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -373,7 +377,7 @@ fn audience_view(
     let live_status = live_status(data.viewers);
     let questions = audience_questions(&session.code, &data.questions);
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\" aria-label=\"Slide {position} of {slide_count}\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
@@ -385,7 +389,10 @@ fn audience_view(
 
 fn live_status(viewers: u64) -> String {
     let noun = if viewers == 1 { "viewer" } else { "viewers" };
-    format!("<span class=\"status-pill live\">Live · {viewers} {noun}</span>")
+    let label = format!("Live · {viewers} {noun}");
+    format!(
+        "<span class=\"status-pill live\" data-live-status data-live-label=\"{label}\">{label}</span>"
+    )
 }
 
 fn presenter_notes(notes: Option<&str>) -> String {
@@ -400,7 +407,7 @@ fn presenter_notes(notes: Option<&str>) -> String {
 fn audience_questions(code: &str, questions: &[store::QuestionRow]) -> String {
     let items = question_items(code, questions, false);
     format!(
-        "<section class=\"question-panel audience-questions\" aria-labelledby=\"audience-questions-title\"><div class=\"question-panel-heading\"><div><p class=\"eyebrow\">Q&amp;A</p><h2 id=\"audience-questions-title\">Questions</h2></div><span>{} asked</span></div><div class=\"question-error\" data-question-error></div><form class=\"question-form\" hx-post=\"/sessions/{code}/questions\" hx-swap=\"none\"><label for=\"question-body\">Ask the presenter</label><div><textarea id=\"question-body\" name=\"body\" rows=\"2\" maxlength=\"280\" required placeholder=\"What would you like to know?\"></textarea><button type=\"submit\">Ask</button></div><small>Up to 280 characters · five questions per person</small></form><ol class=\"question-list\">{items}</ol></section>",
+        "<section class=\"question-panel audience-questions\" aria-labelledby=\"audience-questions-title\"><div class=\"question-panel-heading\"><div><p class=\"eyebrow\">Q&amp;A</p><h2 id=\"audience-questions-title\">Questions</h2></div><span>{} asked</span></div><div class=\"question-error\" data-question-error role=\"alert\"></div><form class=\"question-form\" hx-post=\"/sessions/{code}/questions\" hx-swap=\"none\" hx-disable=\"find button\"><label for=\"question-body\">Ask the presenter</label><div><textarea id=\"question-body\" name=\"body\" rows=\"2\" maxlength=\"280\" required placeholder=\"What would you like to know?\"></textarea><button type=\"submit\">Ask</button></div><small>Up to 280 characters · five questions per person</small></form><ol class=\"question-list\">{items}</ol></section>",
         questions.len(),
     )
 }
@@ -433,13 +440,13 @@ fn question_items(code: &str, questions: &[store::QuestionRow], presenter: bool)
                 let action = if question.answered { "unanswered" } else { "answered" };
                 let label = if question.answered { "Reopen" } else { "Mark answered" };
                 format!(
-                    "<div class=\"question-moderation\"><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"{action}\"><button class=\"secondary small\" type=\"submit\">{label}</button></form><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"ghost small\" type=\"submit\">Dismiss</button></form></div>",
+                    "<div class=\"question-moderation\"><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\" hx-disable=\"find button\"><input type=\"hidden\" name=\"action\" value=\"{action}\"><button class=\"secondary small\" type=\"submit\">{label}</button></form><form hx-post=\"/sessions/{code}/questions/{}/moderate\" hx-swap=\"none\" hx-disable=\"find button\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"ghost small\" type=\"submit\">Dismiss</button></form></div>",
                     question.id, question.id,
                 )
             } else {
                 let own = if question.participant_upvoted { " upvoted" } else { "" };
                 format!(
-                    "<form hx-post=\"/sessions/{code}/questions/{}/vote\" hx-swap=\"none\"><button class=\"question-vote{own}\" type=\"submit\" aria-pressed=\"{}\" aria-label=\"Upvote question; {} votes\"><span aria-hidden=\"true\">▲</span>{}</button></form>",
+                    "<form hx-post=\"/sessions/{code}/questions/{}/vote\" hx-swap=\"none\" hx-disable=\"find button\"><button class=\"question-vote{own}\" type=\"submit\" aria-pressed=\"{}\" aria-label=\"Upvote question; {} votes\"><span aria-hidden=\"true\">▲</span>{}</button></form>",
                     question.id, question.participant_upvoted, question.vote_count, question.vote_count,
                 )
             };
@@ -556,9 +563,10 @@ fn audience_interaction(
                 slide_index,
                 options.iter().map(String::as_str),
                 &data.selected,
+                !multiple,
             );
             format!(
-                "<div class=\"interaction-body\">{}<p>{}</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
+                "<div class=\"interaction-body\">{}<p>{}</p><div id=\"interaction-error\" role=\"alert\"></div>{}</div>",
                 optional_heading(question.as_deref()),
                 if *multiple {
                     "Select all that apply."
@@ -569,7 +577,7 @@ fn audience_interaction(
             )
         }
         Interaction::WordCloud { prompt, max_length } => format!(
-            "<div class=\"interaction-body\"><h2>{}</h2><div id=\"interaction-error\" role=\"alert\"></div><form hx-post=\"/sessions/{}/answer\" hx-target=\"#interaction-error\" hx-swap=\"innerHTML\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><label>Your response<input id=\"word-cloud-response\" name=\"value\" maxlength=\"{}\" required value=\"{}\"></label><button type=\"submit\">Send response</button></form></div>",
+            "<div class=\"interaction-body\"><h2>{}</h2><div id=\"interaction-error\" role=\"alert\"></div><form hx-post=\"/sessions/{}/answer\" hx-target=\"#interaction-error\" hx-swap=\"innerHTML\" hx-disable=\"find button\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><label>Your response<input id=\"word-cloud-response\" name=\"value\" maxlength=\"{}\" required value=\"{}\"></label><button type=\"submit\">Send response</button></form></div>",
             encode_text(prompt),
             session.code,
             slide_index,
@@ -585,9 +593,10 @@ fn audience_interaction(
                 slide_index,
                 options.iter().map(|option| option.label.as_str()),
                 &data.selected,
+                true,
             );
             format!(
-                "<div class=\"interaction-body\"><h2>{}</h2><p>Choose the correct answer.</p><div id=\"interaction-error\" role=\"alert\"></div><div class=\"choices\">{}</div></div>",
+                "<div class=\"interaction-body\"><h2>{}</h2><p>Choose the correct answer.</p><div id=\"interaction-error\" role=\"alert\"></div>{}</div>",
                 encode_text(question),
                 choices
             )
@@ -601,24 +610,41 @@ fn choice_buttons<'a>(
     slide_index: usize,
     labels: impl IntoIterator<Item = &'a str>,
     selected: &[String],
+    exclusive: bool,
 ) -> String {
-    labels
+    let labels = labels.into_iter().collect::<Vec<_>>();
+    if exclusive {
+        let choices = labels
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let value = index.to_string();
+                let checked = if selected.contains(&value) { " checked" } else { "" };
+                format!(
+                    "<label class=\"choice\"><input type=\"radio\" name=\"value\" value=\"{index}\"{checked}><span>{}</span></label>",
+                    encode_text(label),
+                )
+            })
+            .collect::<String>();
+        return format!(
+            "<form class=\"choice-form\" hx-post=\"/sessions/{code}/answer\" hx-trigger=\"change\" hx-target=\"#interaction-error\" hx-sync=\"this:replace\" hx-disable=\"findAll input\"><input type=\"hidden\" name=\"slide\" value=\"{slide_index}\"><fieldset><legend class=\"visually-hidden\">Choose one answer</legend><div class=\"choices\">{choices}</div></fieldset></form>"
+        );
+    }
+
+    let choices = labels
         .into_iter()
         .enumerate()
         .map(|(index, label)| {
             let value = index.to_string();
             let selected_class = if selected.contains(&value) { " selected" } else { "" };
             format!(
-                "<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><input type=\"hidden\" name=\"value\" value=\"{}\"><button type=\"submit\" class=\"choice{}\" hx-post=\"/sessions/{}/answer\" hx-include=\"closest form\" hx-target=\"#interaction-error\" aria-pressed=\"{}\">{}</button></form>",
-                slide_index,
-                index,
-                selected_class,
-                code,
+                "<form class=\"choice-toggle-form\"><input type=\"hidden\" name=\"slide\" value=\"{slide_index}\"><input type=\"hidden\" name=\"value\" value=\"{index}\"><button type=\"submit\" class=\"choice{selected_class}\" hx-post=\"/sessions/{code}/answer\" hx-include=\"closest form\" hx-target=\"#interaction-error\" hx-disable=\"this\" aria-pressed=\"{}\">{}</button></form>",
                 selected.contains(&value),
                 encode_text(label),
             )
         })
-        .collect()
+        .collect::<String>();
+    format!("<div class=\"choices\">{choices}</div>")
 }
 
 const WORD_CLOUD_COLORS: [&str; 13] = [
@@ -651,7 +677,7 @@ fn interaction_results(
             orientation,
             ..
         } => format!(
-            "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\">{}<span style=\"margin-left:auto\">{}</span></div>{}</section>",
+            "<section class=\"interaction-body\"><div class=\"interaction-heading\">{}<span>{}</span></div>{}</section>",
             optional_heading(question.as_deref()),
             answer_count_label(answerers),
             chart(
@@ -687,7 +713,7 @@ fn interaction_results(
                 })
                 .collect::<String>();
             format!(
-                "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\"><h2>{}</h2><span>{}</span></div><div class=\"word-cloud\">{}</div></section>",
+                "<section class=\"interaction-body\"><div class=\"interaction-heading\"><h2>{}</h2><span>{}</span></div><div class=\"word-cloud\">{}</div></section>",
                 encode_text(prompt),
                 answer_count_label(answerers),
                 words
@@ -705,7 +731,7 @@ fn interaction_results(
                 })
                 .collect();
             format!(
-                "<section class=\"interaction-body\"><div style=\"display:flex;justify-content:space-between;gap:1rem\"><h2>{}</h2><span>{}</span></div>{}</section>",
+                "<section class=\"interaction-body\"><div class=\"interaction-heading\"><h2>{}</h2><span>{}</span></div>{}</section>",
                 encode_text(question),
                 answer_count_label(answerers),
                 chart(
@@ -760,7 +786,7 @@ fn ordering_response(
         })
         .collect::<String>();
     format!(
-        "<section class=\"interaction-body ordering-response\"><h2>{}</h2><p>Drag the cards into your preferred order. Changes are saved automatically.</p><div id=\"interaction-error\" role=\"alert\"></div><form class=\"ordering-form\" hx-post=\"/sessions/{}/answer\" hx-target=\"#interaction-error\" hx-swap=\"innerHTML\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><input type=\"hidden\" name=\"value\" value=\"{}\" data-order-value><p class=\"visually-hidden\" data-order-status role=\"status\"></p><ol class=\"ordering-cards\" data-ordering-list>{}</ol><div class=\"ordering-submit\"><button class=\"secondary\" type=\"submit\">{}Save order</button></div></form></section>",
+        "<section class=\"interaction-body ordering-response\"><h2>{}</h2><p>Drag the cards into your preferred order. Changes are saved automatically.</p><div id=\"interaction-error\" role=\"alert\"></div><form class=\"ordering-form\" hx-post=\"/sessions/{}/answer\" hx-target=\"#interaction-error\" hx-swap=\"innerHTML\" hx-disable=\"find button\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><input type=\"hidden\" name=\"value\" value=\"{}\" data-order-value><p class=\"visually-hidden\" data-order-status role=\"status\"></p><ol class=\"ordering-cards\" data-ordering-list>{}</ol><div class=\"ordering-submit\"><button class=\"secondary\" type=\"submit\">{}Save order</button></div></form></section>",
         encode_text(prompt),
         code,
         slide_index,
@@ -886,7 +912,7 @@ fn reaction_buttons(
             let count = counts.get(*kind).copied().unwrap_or(0);
             let key = format!("{slide_index}-{kind}");
             if interactive {
-                format!("<form style=\"display:contents\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"{}\" aria-keyshortcuts=\"{}\" title=\"{} ({})\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\" data-audience-shortcut=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></button></form>", slide_index, label, shortcut, label, shortcut, code, kind, kind, key, count, symbol, symbol, count)
+                format!("<form class=\"reaction-form\"><input type=\"hidden\" name=\"slide\" value=\"{}\"><button type=\"submit\" class=\"reaction\" aria-label=\"{}\" aria-keyshortcuts=\"{}\" title=\"{} ({})\" hx-post=\"/sessions/{}/react/{}\" hx-include=\"closest form\" hx-swap=\"none\" hx-disable=\"this\" data-audience-shortcut=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></button></form>", slide_index, label, shortcut, label, shortcut, code, kind, kind, key, count, symbol, symbol, count)
             } else {
                 format!("<span class=\"reaction static\" aria-label=\"{}\" data-reaction-key=\"{}\" data-reaction-count=\"{}\" data-reaction-symbol=\"{}\"><span aria-hidden=\"true\">{}</span><span class=\"count\">{}</span></span>", label, key, count, symbol, symbol, count)
             }
@@ -905,14 +931,14 @@ fn presenter_hand_signal(code: &str, count: i64) -> String {
         format!("{count} people have questions")
     };
     format!(
-        "<form class=\"question-signal\" hx-post=\"/sessions/{code}/hands/reset\" hx-swap=\"none\"><button class=\"danger\" type=\"submit\"><span aria-hidden=\"true\">✋</span><span>{label} · Reset</span></button></form>"
+        "<form class=\"question-signal\" hx-post=\"/sessions/{code}/hands/reset\" hx-swap=\"none\" hx-disable=\"find button\"><button class=\"danger\" type=\"submit\"><span aria-hidden=\"true\">✋</span><span>{label} · Reset</span></button></form>"
     )
 }
 
 fn audience_hand_button(code: &str, raised: bool) -> String {
     let label = if raised { "Lower hand" } else { "Raise hand" };
     format!(
-        "<button class=\"secondary hand-button{}\" type=\"button\" aria-pressed=\"{}\" aria-keyshortcuts=\"Alt+H\" title=\"{} (Alt+H)\" hx-post=\"/sessions/{}/hand\" hx-swap=\"none\" data-audience-shortcut=\"hand\"><span aria-hidden=\"true\">✋</span>{}</button>",
+        "<button class=\"secondary hand-button{}\" type=\"button\" aria-pressed=\"{}\" aria-keyshortcuts=\"Alt+H\" title=\"{} (Alt+H)\" hx-post=\"/sessions/{}/hand\" hx-swap=\"none\" hx-disable=\"this\" data-audience-shortcut=\"hand\"><span aria-hidden=\"true\">✋</span>{}</button>",
         if raised { " raised" } else { "" },
         raised,
         label,
@@ -1127,6 +1153,8 @@ mod tests {
         assert!(!results.contains("<h2>"));
         assert!(preview.contains("Coffee"));
         assert!(audience.contains("Choose one answer."));
+        assert!(audience.contains("type=\"radio\" name=\"value\""));
+        assert!(audience.contains("hx-trigger=\"change\""));
         assert!(results.contains("0 answers"));
     }
 
@@ -1222,7 +1250,7 @@ mod tests {
         assert!(presenter.contains(
             "href=\"/admin/decks/a-useful-deck/edit\" target=\"_blank\" rel=\"noopener\""
         ));
-        assert!(presenter.contains("data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/553675/first\" hx-swap=\"none\" disabled"));
+        assert!(presenter.contains("data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/553675/first\" hx-swap=\"none\" hx-disable=\"this\" disabled"));
         assert!(presenter.contains("data-presenter-notes"));
         assert!(presenter.contains("Mention <strong>ownership</strong> here."));
         assert!(!presenter.contains("Future slides locked"));
@@ -1237,10 +1265,9 @@ mod tests {
             &data,
         );
         assert!(presenter_on_second.contains("data-nav=\"first\""));
-        assert!(
-            !presenter_on_second
-                .contains("hx-post=\"/sessions/553675/first\" hx-swap=\"none\" disabled")
-        );
+        assert!(!presenter_on_second.contains(
+            "hx-post=\"/sessions/553675/first\" hx-swap=\"none\" hx-disable=\"this\" disabled"
+        ));
 
         let audience = audience_view(
             &session,
@@ -1262,7 +1289,7 @@ mod tests {
         assert!(!audience.contains("Mention"));
         assert_eq!(
             live_status(1),
-            "<span class=\"status-pill live\">Live · 1 viewer</span>"
+            "<span class=\"status-pill live\" data-live-status data-live-label=\"Live · 1 viewer\">Live · 1 viewer</span>"
         );
     }
 

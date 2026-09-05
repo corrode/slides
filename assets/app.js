@@ -10,6 +10,7 @@
   let mermaidDiagramId = 0;
   let mermaidLoadPromise = null;
   let mermaidRenderPromise = Promise.resolve();
+  let liveConnectionState = "connecting";
   const COLOR_SCHEME_STORAGE = "slides-color-scheme";
 
   function currentColorScheme() {
@@ -80,6 +81,132 @@
     });
   }
 
+  function initializeSessionWaiting() {
+    const waitUrl = document.body.dataset.sessionWaitUrl;
+    if (!waitUrl) return;
+    const status = document.querySelector("[data-wait-status]");
+    const message = status?.querySelector("[data-wait-message]");
+
+    const checkSession = async () => {
+      if (document.visibilityState !== "hidden") {
+        try {
+          const response = await window.fetch(waitUrl, {
+            method: "HEAD",
+            credentials: "same-origin",
+            cache: "no-store",
+          });
+          if (response.redirected && response.url !== window.location.href) {
+            window.location.assign(response.url);
+            return;
+          }
+          if (!response.ok) throw new Error(`Session check failed with ${response.status}`);
+          status?.classList.remove("warning");
+          if (message) message.textContent = "Waiting for the presenter…";
+        } catch {
+          status?.classList.add("warning");
+          if (message) message.textContent = "Could not check right now. Retrying…";
+        }
+      }
+      window.setTimeout(checkSession, 5000);
+    };
+
+    window.setTimeout(checkSession, 5000);
+  }
+
+  function filterDecks(query) {
+    const normalized = query.trim().toLocaleLowerCase();
+    const cards = [...document.querySelectorAll("[data-deck-card]")];
+    let visible = 0;
+    cards.forEach((card) => {
+      const matches = (card.dataset.searchText || "").toLocaleLowerCase().includes(normalized);
+      card.hidden = !matches;
+      if (matches) visible += 1;
+    });
+
+    const status = document.querySelector("[data-deck-filter-status]");
+    if (status) status.textContent = `${visible} ${visible === 1 ? "presentation" : "presentations"}`;
+    const empty = document.querySelector("[data-deck-empty]");
+    if (empty) empty.hidden = visible > 0 || cards.length === 0;
+  }
+
+  function relativeLuminance(hex) {
+    const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+    if (channels.some(Number.isNaN)) return null;
+    const [red, green, blue] = channels.map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  }
+
+  function contrastRatio(first, second) {
+    const firstLuminance = relativeLuminance(first);
+    const secondLuminance = relativeLuminance(second);
+    if (firstLuminance === null || secondLuminance === null) return null;
+    const lighter = Math.max(firstLuminance, secondLuminance);
+    const darker = Math.min(firstLuminance, secondLuminance);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  function updateThemeContrast() {
+    const output = document.querySelector("[data-theme-contrast]");
+    if (!output) return;
+    const value = (name) => document.querySelector(`[data-theme-color="${name}"]`)?.value;
+    const background = value("background");
+    const text = value("text");
+    const accent = value("accent");
+    if (!background || !text || !accent) return;
+
+    const textRatio = contrastRatio(background, text);
+    const accentRatio = contrastRatio(background, accent);
+    if (textRatio === null || accentRatio === null) return;
+    const issues = [];
+    if (textRatio < 4.5) issues.push(`text ${textRatio.toFixed(1)}:1`);
+    if (accentRatio < 3) issues.push(`large accent text ${accentRatio.toFixed(1)}:1`);
+    output.classList.toggle("warning", issues.length > 0);
+    output.classList.toggle("success", issues.length === 0);
+    output.textContent = issues.length
+      ? `Low contrast: ${issues.join(", ")}. Adjust the colors for better readability.`
+      : `Good slide contrast: body text ${textRatio.toFixed(1)}:1, large accent text ${accentRatio.toFixed(1)}:1.`;
+  }
+
+  function renderLiveConnectionState() {
+    document.body.dataset.liveConnection = liveConnectionState;
+    document.querySelectorAll("[data-live-status]").forEach((status) => {
+      status.classList.remove("live", "connected", "pending", "disconnected");
+      if (liveConnectionState === "connected") {
+        status.classList.add("live");
+        status.textContent = status.dataset.liveLabel || "Live";
+      } else if (liveConnectionState === "reconnecting") {
+        status.classList.add("pending");
+        status.textContent = "Reconnecting…";
+      } else if (liveConnectionState === "disconnected") {
+        status.classList.add("disconnected");
+        status.textContent = "Updates paused";
+      } else {
+        status.classList.add("pending");
+        status.textContent = "Connecting…";
+      }
+    });
+  }
+
+  function setLiveConnectionState(state) {
+    liveConnectionState = state;
+    renderLiveConnectionState();
+    const error = document.querySelector("#live-transport-error");
+    if (!error) return;
+    if (state === "reconnecting" || state === "disconnected") {
+      error.className = "notice error live-transport-error";
+      error.textContent =
+        state === "reconnecting"
+          ? "Live updates were interrupted. Reconnecting automatically…"
+          : "Live updates are paused. Reload the page to reconnect.";
+    } else {
+      error.replaceChildren();
+      error.className = "";
+    }
+  }
+
   function rememberBars() {
     previousBarValues.clear();
     document.querySelectorAll("[data-live-bar]").forEach((bar) => {
@@ -121,6 +248,9 @@
     if (slideBeforeSwap !== null && currentSlide !== null && currentSlide !== slideBeforeSwap) {
       const slide = liveView.querySelector(".slide-stage, .audience-slide");
       slide?.classList.add("slide-changed");
+      const position = liveView.querySelector(".nav-position")?.textContent;
+      const announcer = document.querySelector("#live-announcer");
+      if (announcer && position) announcer.textContent = `Slide ${position.replace("/", " of ")}`;
       window.setTimeout(() => slide?.classList.remove("slide-changed"), 1200);
     }
     slideBeforeSwap = currentSlide;
@@ -348,9 +478,12 @@
   function blocksSlideShortcuts(target) {
     return (
       target instanceof HTMLElement &&
-      (target.matches("input, textarea, select") ||
-        target.isContentEditable ||
-        Boolean(target.closest("[data-ordering-list]")))
+      (target.isContentEditable ||
+        Boolean(
+          target.closest(
+            "input, textarea, select, button, a, summary, [role='button'], [role='radio'], [data-ordering-list]",
+          ),
+        ))
     );
   }
 
@@ -390,7 +523,7 @@
     const presenter = document.querySelector(".presenter-shell");
     const preview = document.querySelector("[data-preview-deck]");
     if (!presenter && !preview) return false;
-    if (preview && !presenter && action === "current") {
+    if (preview && !presenter && action === "first") {
       showPreviewSlide(preview, 0);
       return true;
     }
@@ -412,18 +545,11 @@
       return;
     }
     if (blocksSlideShortcuts(event.target)) return;
-    if (
-      event.key === " " &&
-      event.target instanceof HTMLElement &&
-      event.target.matches("button, a")
-    ) {
-      return;
-    }
 
     let action = null;
     if (event.key === "ArrowLeft" || event.key === "PageUp") action = "previous";
     if (event.key === "ArrowRight" || event.key === "PageDown") action = "next";
-    if (event.key === "Home") action = "current";
+    if (event.key === "Home") action = "first";
     if (event.key === " " && presenter) action = "next";
     if (!action || !activateSlideNavigation(action)) return;
     event.preventDefault();
@@ -700,6 +826,8 @@
       output.className = "playground-output";
       output.dataset.playgroundOutput = "";
       output.tabIndex = 0;
+      output.hidden = true;
+      output.setAttribute("aria-label", "Program output");
       result.append(status, output);
 
       block.prepend(toolbar, copyStatus);
@@ -728,6 +856,42 @@
     }
   }
 
+  function diagnosticTokenClass(token) {
+    if (/^error(?:\[[A-Z]\d+\])?:$/.test(token)) return "diagnostic-error";
+    if (/^warning:$/.test(token)) return "diagnostic-warning";
+    if (/^(?:help|note):$/.test(token)) return "diagnostic-info";
+    if (/^-->/.test(token)) return "diagnostic-location";
+    if (/^`/.test(token)) return "diagnostic-code";
+    if (/^[\^~]+$/.test(token)) return "diagnostic-caret";
+    if (/^\d+$/.test(token)) return "number";
+    if (/^(?:fn|let|use|mut|pub|impl|struct|enum|trait|async|await|return|match|if|else|for|while|loop|const|static|type|where|move|ref|self|Self|crate|super|as|in)$/.test(token)) {
+      return "keyword";
+    }
+    return "";
+  }
+
+  function highlightPlaygroundOutput(output, text, success) {
+    const code = document.createElement("code");
+    const tokenPattern = /(`[^`\n]+`|\b(?:error(?:\[[A-Z]\d+\])?|warning|help|note):|-->\s+\S+|\b(?:fn|let|use|mut|pub|impl|struct|enum|trait|async|await|return|match|if|else|for|while|loop|const|static|type|where|move|ref|self|Self|crate|super|as|in)\b|\b\d+\b|[\^~]+)/g;
+
+    text.split("\n").forEach((line, lineIndex, lines) => {
+      let cursor = 0;
+      for (const match of line.matchAll(tokenPattern)) {
+        code.append(document.createTextNode(line.slice(cursor, match.index)));
+        const token = document.createElement("span");
+        token.className = diagnosticTokenClass(match[0]);
+        token.textContent = match[0];
+        code.append(token);
+        cursor = match.index + match[0].length;
+      }
+      code.append(document.createTextNode(line.slice(cursor)));
+      if (lineIndex + 1 < lines.length) code.append(document.createTextNode("\n"));
+    });
+
+    output.replaceChildren(code);
+    output.setAttribute("aria-label", success ? "Program output" : "Compiler output");
+  }
+
   async function runRustCode(button) {
     const block = button.closest("[data-rust-code]");
     const source = rustCodeSource(button);
@@ -742,9 +906,11 @@
     button.dataset.lastRunAt = `${now}`;
     button.disabled = true;
     result.hidden = false;
-    result.classList.remove("success", "error");
+    result.dataset.state = "loading";
+    status.classList.remove("visually-hidden");
     status.textContent = "Running on play.rust-lang.org…";
-    output.textContent = "";
+    output.hidden = true;
+    output.replaceChildren();
 
     try {
       const response = await fetch("/api/playground/run", {
@@ -760,19 +926,22 @@
         } else {
           status.textContent = "The Playground is unavailable. Try again shortly.";
         }
-        result.classList.add("error");
+        result.dataset.state = "error";
         return;
       }
 
       const data = await response.json();
       const streams = [data.stdout, data.stderr].filter((value) => value);
-      output.textContent = streams.join("\n") || "(no output)";
-      status.textContent = data.success ? "Finished." : "Compilation failed.";
-      result.classList.add(data.success ? "success" : "error");
+      const outputText = streams.join("\n") || "(no output)";
+      highlightPlaygroundOutput(output, outputText, data.success);
+      output.hidden = false;
+      status.textContent = data.success ? "Run finished." : "Compilation failed.";
+      status.classList.add("visually-hidden");
+      result.dataset.state = data.success ? "success" : "error";
     } catch (error) {
       console.error(error);
       status.textContent = "The Playground request failed. Check your connection and try again.";
-      result.classList.add("error");
+      result.dataset.state = "error";
     } finally {
       button.disabled = false;
     }
@@ -840,6 +1009,10 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     initializeColorScheme();
+    initializeSessionWaiting();
+    filterDecks(document.querySelector("[data-deck-filter]")?.value || "");
+    updateThemeContrast();
+    renderLiveConnectionState();
     formatCreatedAt();
     initializeMarkdownEditor();
     animateBars();
@@ -862,6 +1035,14 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      const menu = document.querySelector(".context-menu[open]");
+      if (menu) {
+        menu.removeAttribute("open");
+        menu.querySelector("summary")?.focus();
+        return;
+      }
+    }
     if (keyboardEditorDivider(event)) return;
     if (!keyboardAudienceAction(event)) keyboardNavigation(event);
   });
@@ -886,8 +1067,11 @@
   });
 
   document.addEventListener("input", (event) => {
-    if (!event.target.matches?.("#deck-title")) return;
-    document.title = `Edit ${event.target.value || "Untitled"} · Slides`;
+    if (event.target.matches?.("#deck-title")) {
+      document.title = `Edit ${event.target.value || "Untitled"} · Slides`;
+    }
+    if (event.target.matches?.("[data-deck-filter]")) filterDecks(event.target.value);
+    if (event.target.matches?.("[data-theme-color]")) updateThemeContrast();
   });
 
   document.addEventListener(
@@ -907,6 +1091,11 @@
   });
 
   document.addEventListener("click", (event) => {
+    const contextMenu = event.target.closest(".context-menu");
+    document.querySelectorAll(".context-menu[open]").forEach((menu) => {
+      if (menu !== contextMenu) menu.removeAttribute("open");
+    });
+
     const colorSchemeToggle = event.target.closest("[data-color-scheme-toggle]");
     if (colorSchemeToggle) {
       applyColorScheme(currentColorScheme() === "dark" ? "light" : "dark", true);
@@ -1045,21 +1234,70 @@
   document.addEventListener("pointercancel", finishPointerOrdering);
   document.addEventListener("lostpointercapture", finishPointerOrdering);
 
-  document.addEventListener("htmx:responseError", (event) => {
-    const request = event.detail.elt;
+  function showHtmxFailure(context, fallbackMessage) {
+    const request = context?.sourceElement;
     if (!(request instanceof HTMLElement)) return;
-    const questionPanel = request.closest(".question-panel");
-    if (questionPanel) {
-      const notice = questionPanel.querySelector("[data-question-error]");
-      if (notice) notice.innerHTML = event.detail.xhr.responseText;
+    const responseHtml =
+      context?.text ||
+      `<div class="notice error" role="alert">${fallbackMessage}</div>`;
+
+    const questionNotice = request
+      .closest(".question-panel")
+      ?.querySelector("[data-question-error]");
+    if (questionNotice) {
+      questionNotice.innerHTML = responseHtml;
       return;
     }
-    if (!request.matches("#deck-form, [data-deck-action]")) return;
-    const notice = document.querySelector("#notice");
-    if (!notice) return;
-    notice.innerHTML =
-      event.detail.xhr.responseText ||
-      '<div class="notice error" role="alert">The draft could not be saved.</div>';
+
+    const interactionNotice = request
+      .closest(".interaction-body")
+      ?.querySelector("#interaction-error");
+    if (interactionNotice) {
+      interactionNotice.innerHTML = responseHtml;
+      return;
+    }
+
+    if (document.body.matches(".live-page") || context?.swap === "none") {
+      const liveNotice = document.querySelector("#live-error");
+      if (liveNotice) liveNotice.innerHTML = responseHtml;
+      return;
+    }
+
+    if (request.matches("#deck-form")) {
+      const notice = document.querySelector("#notice");
+      if (notice) notice.innerHTML = responseHtml;
+    }
+  }
+
+  document.addEventListener("htmx:response:error", (event) => {
+    showHtmxFailure(event.detail?.ctx, "The request could not be completed.");
+  });
+
+  document.addEventListener("htmx:error", (event) => {
+    showHtmxFailure(
+      event.detail?.ctx,
+      "The request failed. Check your connection and try again.",
+    );
+  });
+
+  document.addEventListener("htmx:sse:before:connection", (event) => {
+    if ((event.detail?.connection?.attempt || 0) > 0) setLiveConnectionState("reconnecting");
+  });
+
+  document.addEventListener("htmx:sse:after:connection", () => {
+    setLiveConnectionState("connected");
+  });
+
+  document.addEventListener("htmx:sse:after:message", () => {
+    setLiveConnectionState("connected");
+  });
+
+  document.addEventListener("htmx:sse:error", () => {
+    setLiveConnectionState("reconnecting");
+  });
+
+  document.addEventListener("htmx:sse:close", (event) => {
+    if (event.detail?.reason === "ended") setLiveConnectionState("disconnected");
   });
 
   document.addEventListener("htmx:before:swap", () => {
@@ -1076,6 +1314,7 @@
     restorePreviewSlide();
     restorePresenterNotes();
     restorePresenterQuestions();
+    renderLiveConnectionState();
     updateColorSchemeControls();
     initializeMermaidDiagrams();
     initializeRustPlaygrounds();

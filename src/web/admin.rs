@@ -265,7 +265,7 @@ pub async fn save(
             )
         }
         Err(error) => format!(
-            "<span class=\"error-text\">{saved} Preview unavailable: {}</span>",
+            "<span class=\"error-text\">{saved} Preview unavailable: {}</span><div id=\"preview\" hx-swap-oob=\"innerHTML\"><div class=\"empty-state preview-error-state\"><div><strong>Preview paused</strong><p>Fix the Markdown error to render the latest draft.</p></div></div></div>",
             html_escape::encode_text(&error.to_string())
         ),
     };
