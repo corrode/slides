@@ -1620,14 +1620,31 @@ button.small {
   max-width: 18ch;
   margin-bottom: 0.45em;
   color: var(--highlight);
-  font-size: clamp(2rem, 5.4vw, 5.2rem);
+  font-size: clamp(2rem, 4.2vw, 4.25rem);
 }
 
 .slide-content h2 {
   max-width: 24ch;
   margin-bottom: 0.55em;
   color: var(--heading);
-  font-size: clamp(1.6rem, 3.8vw, 3.8rem);
+  font-size: clamp(1.5rem, 3.1vw, 3.2rem);
+}
+
+.slide-content:has(> h2 ~ h2) {
+  justify-content: flex-start;
+}
+
+.slide-content:has(> h2 ~ h2) h2 {
+  margin-bottom: 0.25em;
+  font-size: clamp(1.3rem, 2.5vw, 2.7rem);
+}
+
+.slide-content:has(> h2 ~ h2) h2:not(:first-child) {
+  margin-top: 0.45em;
+}
+
+.slide-content:has(> h2 ~ h2) p {
+  margin-bottom: 0.35em;
 }
 
 .slide-content p,
@@ -2677,6 +2694,11 @@ pre code {
   transform: translateX(50%);
 }
 
+.presenter-shell .presentation-navigation {
+  width: min(calc(100% - 2rem), 42rem);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .presentation-navigation > * {
   width: 100%;
   min-width: 0;
@@ -3255,6 +3277,15 @@ pre code {
 }
 
 @media (max-width: 30rem) {
+  .presenter-shell .presentation-navigation .button-icon {
+    display: none;
+  }
+
+  .presenter-shell .presentation-navigation > * {
+    padding-inline: 0.25rem;
+    font-size: 0.72rem;
+  }
+
   .topbar .brand span {
     display: none;
   }

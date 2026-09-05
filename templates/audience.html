@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
   <script src="/assets/hx-sse.min.js" defer></script>
+  {% if has_mermaid %}
+  <script src="/assets/vendor/mermaid/mermaid.min.js" defer></script>
+  {% endif %}
   <script src="/assets/app.js" defer></script>
 </head>
 <body data-presentation-theme style="{{ theme_style }}">

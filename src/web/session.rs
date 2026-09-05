@@ -45,6 +45,7 @@ struct PresenterTemplate {
     code: String,
     theme_style: String,
     initial_live: String,
+    has_mermaid: bool,
 }
 
 #[derive(Template)]
@@ -62,6 +63,7 @@ struct AudienceTemplate {
     events_url: String,
     theme_style: String,
     initial_live: String,
+    has_mermaid: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +195,10 @@ pub async fn audience(
         events_url,
         theme_style: Theme::from(&version).style(),
         initial_live,
+        has_mermaid: document
+            .slides
+            .iter()
+            .any(|slide| slide.html.contains("data-mermaid-diagram")),
     };
     Ok((jar, Html(page.render()?)).into_response())
 }
@@ -227,6 +233,10 @@ pub async fn presenter(
         code: session.code.clone(),
         theme_style: Theme::from(&version).style(),
         initial_live,
+        has_mermaid: document
+            .slides
+            .iter()
+            .any(|slide| slide.html.contains("data-mermaid-diagram")),
     })
 }
 
@@ -336,6 +346,16 @@ pub async fn events(
                 .text("keepalive"),
         )
         .into_response())
+}
+
+pub async fn first(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(code): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&jar, &state)?;
+    mutate_position(&state, &code, |_, _| 0).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub async fn previous(
@@ -891,7 +911,44 @@ fn historical_slide(
 mod tests {
     use askama::Template;
 
-    use super::{SessionEndedTemplate, historical_slide, valid_ordering};
+    use super::{
+        AudienceTemplate, PresenterTemplate, SessionEndedTemplate, historical_slide, valid_ordering,
+    };
+
+    #[test]
+    fn live_pages_load_mermaid_eagerly_only_when_the_deck_uses_it() {
+        let presenter = PresenterTemplate {
+            title: "Deck".into(),
+            code: "123456".into(),
+            theme_style: String::new(),
+            initial_live: String::new(),
+            has_mermaid: true,
+        }
+        .render()
+        .unwrap();
+        let audience = AudienceTemplate {
+            title: "Deck".into(),
+            events_url: "/sessions/123456/events?view=audience".into(),
+            theme_style: String::new(),
+            initial_live: String::new(),
+            has_mermaid: true,
+        }
+        .render()
+        .unwrap();
+        let audience_without_mermaid = AudienceTemplate {
+            title: "Deck".into(),
+            events_url: "/sessions/123456/events?view=audience".into(),
+            theme_style: String::new(),
+            initial_live: String::new(),
+            has_mermaid: false,
+        }
+        .render()
+        .unwrap();
+
+        assert!(presenter.contains("/assets/vendor/mermaid/mermaid.min.js"));
+        assert!(audience.contains("/assets/vendor/mermaid/mermaid.min.js"));
+        assert!(!audience_without_mermaid.contains("/assets/vendor/mermaid/mermaid.min.js"));
+    }
 
     #[test]
     fn historical_slide_expires_when_the_presenter_moves_or_requests_attention() {

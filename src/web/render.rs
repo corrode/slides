@@ -274,7 +274,8 @@ fn presenter_view(
     index: usize,
     data: &LiveData,
 ) -> String {
-    let previous_disabled = if index == 0 { " disabled" } else { "" };
+    let first_disabled = if index == 0 { " disabled" } else { "" };
+    let previous_disabled = first_disabled;
     let next_disabled = if index + 1 >= document.slides.len() {
         " disabled"
     } else {
@@ -329,7 +330,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -339,6 +340,7 @@ fn presenter_view(
         end_icon = icon("end"),
         slide_html = slide.html,
         reactions = reaction_buttons(&session.code, index, &data.reactions, false),
+        first_icon = icon("first"),
         previous_icon = icon("previous"),
         attention_icon = icon("attention"),
         next_icon = icon("next"),
@@ -919,6 +921,9 @@ fn color_scheme_toggle() -> &'static str {
 
 fn icon(name: &str) -> &'static str {
     match name {
+        "first" => {
+            "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M6 5v14M18 6l-6 6 6 6\"/></svg>"
+        }
         "previous" => {
             "<svg class=\"button-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m15 18-6-6 6-6\"/></svg>"
         }
@@ -1198,9 +1203,18 @@ mod tests {
         assert!(presenter.contains("Copy link"));
         assert!(presenter.contains("Live · 3 viewers"));
         assert!(presenter.contains("data-color-scheme-toggle"));
+        assert!(presenter.contains("data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/553675/first\" hx-swap=\"none\" disabled"));
         assert!(presenter.contains("data-presenter-notes"));
         assert!(presenter.contains("Mention <strong>ownership</strong> here."));
         assert!(!presenter.contains("Future slides locked"));
+
+        let presenter_on_second =
+            presenter_view(&session, &version, &document, &document.slides[1], 1, &data);
+        assert!(presenter_on_second.contains("data-nav=\"first\""));
+        assert!(
+            !presenter_on_second
+                .contains("hx-post=\"/sessions/553675/first\" hx-swap=\"none\" disabled")
+        );
 
         let audience = audience_view(
             &session,

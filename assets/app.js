@@ -500,7 +500,22 @@
 
   function mermaidThemeVariables(diagram) {
     const styles = window.getComputedStyle(diagram);
-    const color = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const color = (name, fallback) => {
+      const value = styles.getPropertyValue(name).trim() || fallback;
+      if (!context) return fallback;
+
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = fallback;
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      if (alpha === 255) return `rgb(${red}, ${green}, ${blue})`;
+      return `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
+    };
     const background = color("--bg", "#282934");
     const surface = color("--surface-raised", "rgb(255 255 255 / 12%)");
     const text = color("--text", "#e1e1e1");
@@ -549,8 +564,19 @@
     mermaidLoadPromise = new Promise((resolve) => {
       const script = document.createElement("script");
       script.src = "/assets/vendor/mermaid/mermaid.min.js";
-      script.onload = () => resolve(Boolean(window.mermaid));
-      script.onerror = () => resolve(false);
+      script.onload = () => {
+        const loaded = Boolean(window.mermaid);
+        if (!loaded) {
+          script.remove();
+          mermaidLoadPromise = null;
+        }
+        resolve(loaded);
+      };
+      script.onerror = () => {
+        script.remove();
+        mermaidLoadPromise = null;
+        resolve(false);
+      };
       document.head.append(script);
     });
     return mermaidLoadPromise;
@@ -566,7 +592,10 @@
       diagrams.forEach((diagram) => {
         diagram.dataset.mermaidState = "error";
         const error = diagram.querySelector("[data-mermaid-error]");
-        if (error) error.hidden = false;
+        if (error) {
+          error.textContent = "Could not load Mermaid. Reload the page to try again.";
+          error.hidden = false;
+        }
       });
       return;
     }
@@ -614,6 +643,7 @@
         output.replaceChildren();
         output.hidden = true;
         source.hidden = false;
+        error.textContent = "Could not render this diagram. Check the Mermaid syntax.";
         error.hidden = false;
         diagram.dataset.mermaidState = "error";
       }

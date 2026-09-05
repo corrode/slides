@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/decks/{slug}/sessions", post(admin::start_session))
         .route("/present/{code}", get(session::presenter))
         .route("/sessions/{code}/events", get(session::events))
+        .route("/sessions/{code}/first", post(session::first))
         .route("/sessions/{code}/previous", post(session::previous))
         .route("/sessions/{code}/next", post(session::next))
         .route("/sessions/{code}/attention", post(session::focus_audience))
