@@ -7,6 +7,7 @@
   let editorSplitPointer = null;
   let presenterNotesOpen = true;
   let presenterQuestionsOpen = false;
+  let audienceQuestionsOpen = false;
   let mermaidDiagramId = 0;
   let mermaidLoadPromise = null;
   let mermaidRenderPromise = Promise.resolve();
@@ -361,7 +362,7 @@
   const EDITOR_SPLIT_MAX = 70;
   const EDITOR_SPLIT_STORAGE = "slides-editor-pane-width";
   const PRESENTER_NOTES_STORAGE = "slides-presenter-notes-open";
-  const PRESENTER_QUESTIONS_STORAGE = "slides-presenter-questions-open";
+  const PRESENTER_QUESTIONS_STORAGE = "slides-presenter-question-sidebar-open";
 
   function setEditorSplit(layout, requested) {
     const position = Math.max(EDITOR_SPLIT_MIN, Math.min(EDITOR_SPLIT_MAX, requested));
@@ -415,22 +416,34 @@
     }
   }
 
-  function initializePresenterQuestions() {
+  function initializeQuestionPanels() {
+    const desktop = window.matchMedia?.("(min-width: 62.001rem)").matches ?? true;
+    audienceQuestionsOpen = desktop;
     try {
-      presenterQuestionsOpen =
-        window.localStorage.getItem(PRESENTER_QUESTIONS_STORAGE) === "open";
+      const saved = window.localStorage.getItem(PRESENTER_QUESTIONS_STORAGE);
+      presenterQuestionsOpen = saved === null ? desktop : saved === "open";
     } catch {
-      presenterQuestionsOpen = false;
+      presenterQuestionsOpen = desktop;
     }
-    restorePresenterQuestions();
+    restoreQuestionPanels();
   }
 
-  function restorePresenterQuestions() {
-    const questions = document.querySelector("[data-presenter-questions]");
-    if (questions instanceof HTMLDetailsElement) questions.open = presenterQuestionsOpen;
+  function restoreQuestionPanels() {
+    document.querySelectorAll("[data-question-panel]").forEach((questions) => {
+      if (!(questions instanceof HTMLDetailsElement)) return;
+      questions.open =
+        questions.dataset.questionContext === "presenter"
+          ? presenterQuestionsOpen
+          : audienceQuestionsOpen;
+    });
   }
 
-  function rememberPresenterQuestions(details) {
+  function rememberQuestionPanel(details) {
+    if (details.dataset.questionContext === "audience") {
+      audienceQuestionsOpen = details.open;
+      return;
+    }
+
     presenterQuestionsOpen = details.open;
     try {
       window.localStorage.setItem(
@@ -1022,7 +1035,7 @@
     restorePreviewSlide();
     restoreEditorSplit();
     initializePresenterNotes();
-    initializePresenterQuestions();
+    initializeQuestionPanels();
     initializeMermaidDiagrams();
     initializeRustPlaygrounds();
   });
@@ -1078,8 +1091,8 @@
     "toggle",
     (event) => {
       if (event.target.matches?.("[data-presenter-notes]")) rememberPresenterNotes(event.target);
-      if (event.target.matches?.("[data-presenter-questions]")) {
-        rememberPresenterQuestions(event.target);
+      if (event.target.matches?.("[data-question-panel]")) {
+        rememberQuestionPanel(event.target);
       }
     },
     true,
@@ -1269,6 +1282,18 @@
     }
   }
 
+  document.addEventListener("htmx:after:request", (event) => {
+    const context = event.detail?.ctx;
+    const request = context?.sourceElement;
+    if (
+      request instanceof HTMLFormElement &&
+      request.matches(".question-form") &&
+      context.response?.status < 400
+    ) {
+      request.reset();
+    }
+  });
+
   document.addEventListener("htmx:response:error", (event) => {
     showHtmxFailure(event.detail?.ctx, "The request could not be completed.");
   });
@@ -1313,7 +1338,7 @@
     updateReactionFeed(true);
     restorePreviewSlide();
     restorePresenterNotes();
-    restorePresenterQuestions();
+    restoreQuestionPanels();
     renderLiveConnectionState();
     updateColorSchemeControls();
     initializeMermaidDiagrams();

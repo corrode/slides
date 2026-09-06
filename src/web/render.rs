@@ -338,7 +338,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{notes}{questions}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" hx-disable=\"this\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" hx-disable=\"this\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" hx-disable=\"this\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" hx-disable=\"this\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{questions}{notes}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" hx-disable=\"this\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" hx-disable=\"this\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" hx-disable=\"this\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" hx-disable=\"this\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -406,9 +406,10 @@ fn presenter_notes(notes: Option<&str>) -> String {
 
 fn audience_questions(code: &str, questions: &[store::QuestionRow]) -> String {
     let items = question_items(code, questions, false);
+    let count = questions.len();
     format!(
-        "<section class=\"question-panel audience-questions\" aria-labelledby=\"audience-questions-title\"><div class=\"question-panel-heading\"><div><p class=\"eyebrow\">Q&amp;A</p><h2 id=\"audience-questions-title\">Questions</h2></div><span>{} asked</span></div><div class=\"question-error\" data-question-error role=\"alert\"></div><form class=\"question-form\" hx-post=\"/sessions/{code}/questions\" hx-swap=\"none\" hx-disable=\"find button\"><label for=\"question-body\">Ask the presenter</label><div><textarea id=\"question-body\" name=\"body\" rows=\"2\" maxlength=\"280\" required placeholder=\"What would you like to know?\"></textarea><button type=\"submit\">Ask</button></div><small>Up to 280 characters · five questions per person</small></form><ol class=\"question-list\">{items}</ol></section>",
-        questions.len(),
+        "<details class=\"question-panel audience-questions\" data-question-panel data-question-context=\"audience\"><summary><span class=\"question-summary-title\"><span class=\"question-summary-icon\" aria-hidden=\"true\">?</span><span><strong>Questions</strong><small>Ask the presenter</small></span></span><span class=\"question-summary-count\">{count}</span><span class=\"question-summary-chevron\" aria-hidden=\"true\">›</span></summary><div class=\"question-panel-content\"><ol class=\"question-list\" aria-label=\"Audience questions\">{items}</ol><div class=\"question-error\" data-question-error role=\"alert\"></div><form class=\"question-form\" hx-post=\"/sessions/{code}/questions\" hx-swap=\"none\" hx-disable=\"find button\"><label class=\"visually-hidden\" for=\"question-body\">Ask the presenter</label><div class=\"question-composer\"><textarea id=\"question-body\" name=\"body\" rows=\"2\" maxlength=\"280\" required placeholder=\"Ask a question…\" aria-describedby=\"question-help\"></textarea><button class=\"icon-only\" type=\"submit\" aria-label=\"Send question\">{}</button></div><small id=\"question-help\">Anonymous · up to 280 characters</small></form></div></details>",
+        icon("next"),
     )
 }
 
@@ -417,15 +418,21 @@ fn presenter_questions(code: &str, questions: &[store::QuestionRow]) -> String {
         .iter()
         .filter(|question| !question.answered)
         .count();
+    let count = questions.len();
     let items = question_items(code, questions, true);
     format!(
-        "<details class=\"question-panel presenter-questions\" data-presenter-questions><summary>Audience questions · {unanswered} open</summary><ol class=\"question-list\">{items}</ol></details>"
+        "<details class=\"question-panel presenter-questions\" data-question-panel data-question-context=\"presenter\"><summary><span class=\"question-summary-title\"><span class=\"question-summary-icon\" aria-hidden=\"true\">?</span><span><strong>Questions</strong><small>{unanswered} open</small></span></span><span class=\"question-summary-count\">{count}</span><span class=\"question-summary-chevron\" aria-hidden=\"true\">›</span></summary><div class=\"question-panel-content\"><div class=\"question-error\" data-question-error role=\"alert\"></div><ol class=\"question-list\" aria-label=\"Audience questions\">{items}</ol></div></details>"
     )
 }
 
 fn question_items(code: &str, questions: &[store::QuestionRow], presenter: bool) -> String {
     if questions.is_empty() {
-        return "<li class=\"question-empty\">No questions yet.</li>".into();
+        let message = if presenter {
+            "Audience questions will appear here."
+        } else {
+            "No questions yet. Start the conversation."
+        };
+        return format!("<li class=\"question-empty\">{message}</li>");
     }
     questions
         .iter()
@@ -451,7 +458,7 @@ fn question_items(code: &str, questions: &[store::QuestionRow], presenter: bool)
                 )
             };
             format!(
-                "<li class=\"question-item{answered_class}\"><div class=\"question-copy\"><p>{}</p>{answered_label}</div>{actions}</li>",
+                "<li class=\"question-item{answered_class}\"><div class=\"question-message\"><span class=\"question-avatar\" aria-hidden=\"true\">?</span><div class=\"question-copy\"><p>{}</p>{answered_label}</div></div>{actions}</li>",
                 encode_text(&question.body),
             )
         })
@@ -1060,9 +1067,9 @@ mod tests {
     };
 
     use super::{
-        LiveData, archived_questions, archived_slides, audience_interaction, audience_view,
-        interaction_results, live_status, ordering_response, ordering_results, presenter_view,
-        preview, printable, question_items,
+        LiveData, archived_questions, archived_slides, audience_interaction, audience_questions,
+        audience_view, interaction_results, live_status, ordering_response, ordering_results,
+        presenter_questions, presenter_view, preview, printable, question_items,
     };
 
     fn options() -> Vec<String> {
@@ -1305,6 +1312,8 @@ mod tests {
 
         let audience = question_items("553675", &questions, false);
         let presenter = question_items("553675", &questions, true);
+        let audience_panel = audience_questions("553675", &questions);
+        let presenter_panel = presenter_questions("553675", &questions);
         let archive = archived_questions(&questions);
 
         assert!(!audience.contains("<script>"));
@@ -1313,6 +1322,10 @@ mod tests {
         assert!(audience.contains("3 votes"));
         assert!(presenter.contains("Mark answered"));
         assert!(presenter.contains("Dismiss"));
+        assert!(audience_panel.contains("data-question-context=\"audience\""));
+        assert!(audience_panel.contains("class=\"question-composer\""));
+        assert!(presenter_panel.contains("data-question-context=\"presenter\""));
+        assert!(!presenter_panel.contains("class=\"question-form\""));
         assert!(!archive.contains("<script>"));
         assert!(archive.contains("3 upvotes"));
     }
