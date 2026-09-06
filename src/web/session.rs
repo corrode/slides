@@ -148,7 +148,9 @@ pub async fn named_shortlink(
     let deck = store::deck_by_slug(&state.pool, &slug)
         .await?
         .ok_or_else(|| AppError::not_found("Presentation not found."))?;
-    if let Some(session) = store::active_session_for_slug(&state.pool, &slug).await? {
+    if let Some(session) = store::active_session(&state.pool).await?
+        && session.deck_id == deck.id
+    {
         return Ok(Redirect::to(&format!("/join/{}", session.code)).into_response());
     }
     template(WaitingTemplate {

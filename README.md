@@ -7,7 +7,7 @@ The current vertical slice supports:
 - Markdown decks separated by `---`, with presenter-only notes
 - Highlighted fenced code blocks, with sandboxed Rust execution through `play.rust-lang.org`
 - Unsaved preview, saved drafts, and immutable published versions
-- Named shortlinks, automatically derived from deck titles when omitted, and six-digit live-session codes
+- Named shortlinks automatically derived from deck titles when omitted, six-digit session codes, and one live presentation per Slides instance
 - Presenter-controlled slide navigation, keyboard shortcuts, audience locking, and attention recall
 - Anonymous polls, word clouds, quizzes, card ordering, raised hands, audience questions with upvotes, and rate-limited reactions
 - Live horizontal and vertical result charts over Server-Sent Events

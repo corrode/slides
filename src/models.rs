@@ -73,6 +73,13 @@ pub struct DeckVersion {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LiveSessionSummary {
+    pub id: i64,
+    pub deck_id: i64,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct LiveSession {
     pub id: i64,
     pub deck_version_id: i64,

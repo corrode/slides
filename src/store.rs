@@ -10,8 +10,8 @@ use sqlx::{
 };
 
 use crate::models::{
-    ApiTokenSummary, Deck, DeckSummary, DeckVersion, EndedSessionSummary, LiveSession, Theme,
-    legacy_font_id,
+    ApiTokenSummary, Deck, DeckSummary, DeckVersion, EndedSessionSummary, LiveSession,
+    LiveSessionSummary, Theme, legacy_font_id,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -312,8 +312,8 @@ pub async fn start_session(
     deck_id: i64,
     version_id: i64,
 ) -> Result<LiveSession> {
-    if let Some(session) = active_session_for_deck(pool, deck_id).await? {
-        return Ok(session);
+    if let Some(session) = active_session(pool).await? {
+        return get_session(pool, session.id).await;
     }
 
     for _ in 0..20 {
@@ -340,10 +340,8 @@ pub async fn start_session(
                     .as_database_error()
                     .map(|error| error.message())
                     .unwrap_or_default();
-                if message.contains("sessions.deck_id") {
-                    return active_session_for_deck(pool, deck_id)
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("active session was created concurrently"));
+                if let Some(session) = active_session(pool).await? {
+                    return get_session(pool, session.id).await;
                 }
                 if message.contains("sessions.code") {
                     continue;
@@ -356,28 +354,10 @@ pub async fn start_session(
     bail!("could not allocate a session code")
 }
 
-pub async fn active_session_for_deck(
-    pool: &SqlitePool,
-    deck_id: i64,
-) -> Result<Option<LiveSession>> {
-    Ok(sqlx::query_as::<_, LiveSession>(
-        r#"SELECT id, deck_version_id, code, current_slide, locked,
-                  interaction_open, results_revealed, follow_revision, ended_at
-           FROM sessions WHERE deck_id = ? AND ended_at IS NULL"#,
+pub async fn active_session(pool: &SqlitePool) -> Result<Option<LiveSessionSummary>> {
+    Ok(sqlx::query_as::<_, LiveSessionSummary>(
+        "SELECT id, deck_id, code FROM sessions WHERE ended_at IS NULL",
     )
-    .bind(deck_id)
-    .fetch_optional(pool)
-    .await?)
-}
-
-pub async fn active_session_for_slug(pool: &SqlitePool, slug: &str) -> Result<Option<LiveSession>> {
-    Ok(sqlx::query_as::<_, LiveSession>(
-        r#"SELECT s.id, s.deck_version_id, s.code, s.current_slide, s.locked,
-                  s.interaction_open, s.results_revealed, s.follow_revision, s.ended_at
-           FROM sessions s JOIN decks d ON d.id = s.deck_id
-           WHERE d.slug = ? AND s.ended_at IS NULL"#,
-    )
-    .bind(slug)
     .fetch_optional(pool)
     .await?)
 }
@@ -1211,11 +1191,72 @@ mod tests {
                 .code,
             session.code
         );
+        assert!(active_session(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn keeps_only_one_session_live_across_all_decks() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+        let first = start_test_session(&pool, "first-live-deck").await;
+        let first_deck = deck_by_slug(&pool, "first-live-deck")
+            .await
+            .unwrap()
+            .unwrap();
+        let second_deck = create_deck(&pool, "second-live-deck", "Second")
+            .await
+            .unwrap();
+        let second_version = save_and_publish_deck(
+            &pool,
+            second_deck.id,
+            &second_deck.title,
+            &second_deck.draft_source,
+            &second_deck.draft_source,
+            &Theme::from(&second_deck),
+        )
+        .await
+        .unwrap();
+
+        let error = sqlx::query(
+            r#"INSERT INTO sessions (deck_id, deck_version_id, code, started_at)
+               VALUES (?, ?, '000001', ?)"#,
+        )
+        .bind(second_deck.id)
+        .bind(second_version)
+        .bind(now_millis())
+        .execute(&pool)
+        .await
+        .unwrap_err();
         assert!(
-            active_session_for_deck(&pool, deck.id)
-                .await
-                .unwrap()
-                .is_none()
+            error
+                .as_database_error()
+                .is_some_and(|error| error.is_unique_violation())
+        );
+
+        let current = start_session(&pool, second_deck.id, second_version)
+            .await
+            .unwrap();
+        assert_eq!(current.id, first.id);
+        let live = active_session(&pool).await.unwrap().unwrap();
+        assert_eq!(live.deck_id, first_deck.id);
+
+        finish_session_with_artifact(
+            &pool,
+            first.id,
+            now_millis(),
+            &"a".repeat(64),
+            b"first archive",
+        )
+        .await
+        .unwrap();
+        let second = start_session(&pool, second_deck.id, second_version)
+            .await
+            .unwrap();
+        assert_ne!(second.id, first.id);
+        assert_eq!(
+            active_session(&pool).await.unwrap().unwrap().deck_id,
+            second_deck.id
         );
     }
 
@@ -1388,6 +1429,15 @@ mod tests {
         assert_eq!(questions[0].id, first.id);
         assert!(!questions[0].answered);
 
+        finish_session_with_artifact(
+            &pool,
+            session.id,
+            now_millis(),
+            &"q".repeat(64),
+            b"questions archive",
+        )
+        .await
+        .unwrap();
         let other_session = start_test_session(&pool, "other-questions").await;
         let error = toggle_question_upvote(&pool, other_session.id, first.id, "bob")
             .await

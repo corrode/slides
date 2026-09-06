@@ -38,7 +38,7 @@ struct DashboardTemplate {
 #[template(path = "editor.html")]
 struct EditorTemplate {
     deck: Deck,
-    active_code: Option<String>,
+    live_code: Option<String>,
     initial_notice: String,
     initial_preview: String,
 }
@@ -206,7 +206,7 @@ pub async fn editor(
         return Ok(Redirect::to("/admin/login").into_response());
     }
     let deck = required_deck(&state, &slug).await?;
-    let active_code = store::active_session_for_deck(&state.pool, deck.id)
+    let live_code = store::active_session(&state.pool)
         .await?
         .map(|session| session.code);
     let (initial_preview, initial_notice) = match parse_deck(&deck.draft_source) {
@@ -225,7 +225,7 @@ pub async fn editor(
     };
     template(EditorTemplate {
         deck,
-        active_code,
+        live_code,
         initial_notice,
         initial_preview,
     })
@@ -249,9 +249,9 @@ pub async fn save(
         &theme,
     )
     .await?;
-    let active = store::active_session_for_deck(&state.pool, deck.id)
+    let active = store::active_session(&state.pool)
         .await?
-        .is_some();
+        .is_some_and(|session| session.deck_id == deck.id);
     let saved = if active {
         "Draft saved. Changes apply to the next session."
     } else {
@@ -333,7 +333,7 @@ pub async fn start_session(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    if let Some(session) = store::active_session_for_deck(&state.pool, deck.id).await? {
+    if let Some(session) = store::active_session(&state.pool).await? {
         return Ok(Redirect::to(&format!("/present/{}", session.code)).into_response());
     }
     validate_deck_form(&form)?;
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn presentation_start_uses_a_native_form_submission() {
-        let html = EditorTemplate {
+        let template = EditorTemplate {
             deck: Deck {
                 id: 1,
                 slug: "demo".into(),
@@ -505,18 +505,26 @@ mod tests {
                 theme_text: "#e1e1e1".into(),
                 theme_accent: "#fc218a".into(),
             },
-            active_code: None,
+            live_code: None,
             initial_notice: String::new(),
             initial_preview: String::new(),
-        }
-        .render()
-        .unwrap();
+        };
+        let html = template.render().unwrap();
 
         assert!(html.contains(
             "type=\"submit\" formmethod=\"post\" formaction=\"/admin/decks/demo/sessions\""
         ));
         assert!(!html.contains("data-present-url"));
         assert!(!html.contains("hx-post=\"/admin/decks/demo/sessions\""));
+
+        let live_html = EditorTemplate {
+            live_code: Some("123456".into()),
+            ..template
+        }
+        .render()
+        .unwrap();
+        assert!(live_html.contains("href=\"/present/123456\""));
+        assert!(!live_html.contains("formaction=\"/admin/decks/demo/sessions\""));
     }
 
     #[test]

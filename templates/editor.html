@@ -28,7 +28,7 @@
           <button class="ghost small" type="button" popovertarget="editor-settings"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 12h2m12 0h2M12 4v2m0 12v2m-5.7-2.3 1.4-1.4m8.6-8.6 1.4-1.4m0 11.4-1.4-1.4M7.7 7.7 6.3 6.3"/></svg><span class="toolbar-label">Theme</span></button>
           <button class="ghost small" type="button" data-print-url="/admin/decks/{{ deck.slug }}/print" data-deck-form="#deck-form"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM9 12h6M9 16h6M14 3v4h4"/></svg><span class="toolbar-label">PDF</span></button>
         </div>
-        {% match active_code %}
+        {% match live_code %}
           {% when Some with (code) %}<a class="button small" href="/present/{{ code }}"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg>Open live session</a>
           {% when None %}<button class="small" type="submit" formmethod="post" formaction="/admin/decks/{{ deck.slug }}/sessions"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>Present</button>
         {% endmatch %}
