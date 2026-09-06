@@ -831,14 +831,13 @@ button,
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   box-shadow: 0 0.8rem 2.5rem rgb(0 0 0 / 10%);
   color: var(--text);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .presentation-card:hover,
 .presentation-card:focus-within {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 18%);
-  transform: translateY(-2px);
 }
 
 .presentation-card-link {
@@ -3138,12 +3137,11 @@ pre code {
   font-size: calc(0.82rem + var(--weight, 1) * 0.32rem);
   font-weight: calc(520 + var(--weight, 1) * 45);
   line-height: 1;
-  transition: filter 160ms ease, transform 160ms ease;
+  transition: filter 160ms ease;
 }
 
 .word-cloud > *:hover {
   filter: brightness(1.15);
-  transform: scale(1.04);
 }
 
 .reactions {
