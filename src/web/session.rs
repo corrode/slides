@@ -53,7 +53,8 @@ struct PresenterTemplate {
 struct SessionEndedTemplate {
     title: String,
     slug: String,
-    share_token: String,
+    code: String,
+    share_token: Option<String>,
 }
 
 #[derive(Template)]
@@ -689,9 +690,18 @@ pub async fn end(
     let session = required_session(&state, &code).await?;
     let runtime = state.hub.runtime(session.id).await;
     let _guard = runtime.mutation.lock().await;
-    let session = store::get_session(&state.pool, session.id).await?;
-    ensure_session_artifact(&state, &session).await?;
+    let mut session = store::get_session(&state.pool, session.id).await?;
+    let ended_at = session.ended_at.unwrap_or_else(store::now_millis);
+    store::end_session(&state.pool, session.id, ended_at).await?;
+    session.ended_at = Some(ended_at);
     state.hub.finish(session.id).await;
+    if let Err(error) = ensure_session_artifact(&state, &session).await {
+        tracing::error!(
+            session_id = session.id,
+            ?error,
+            "session ended without an archive"
+        );
+    }
     Ok(Redirect::to(&format!("/admin/sessions/{code}/ended")).into_response())
 }
 
@@ -705,13 +715,15 @@ pub async fn ended(
     if session.ended_at.is_none() {
         return Err(AppError::bad_request("This presentation is still live."));
     }
-    let artifact = store::artifact_for_session(&state.pool, session.id)
+    let version = store::get_version(&state.pool, session.deck_version_id).await?;
+    let share_token = store::artifact_for_session(&state.pool, session.id)
         .await?
-        .ok_or_else(|| AppError::not_found("Session archive not found."))?;
+        .map(|artifact| artifact.share_token);
     template(SessionEndedTemplate {
-        title: artifact.title,
+        title: version.title,
         slug: store::deck_slug_for_session(&state.pool, session.id).await?,
-        share_token: artifact.share_token,
+        code: session.code,
+        share_token,
     })
 }
 
@@ -734,7 +746,10 @@ pub async fn create_artifact(
     Ok(Redirect::to(&format!("/shared/{token}/")).into_response())
 }
 
-async fn ensure_session_artifact(state: &AppState, session: &LiveSession) -> AppResult<String> {
+async fn ensure_session_artifact(
+    state: &AppState,
+    session: &LiveSession,
+) -> anyhow::Result<String> {
     if let Some(artifact) = store::artifact_for_session(&state.pool, session.id).await? {
         return Ok(artifact.share_token);
     }
@@ -754,10 +769,7 @@ async fn ensure_session_artifact(state: &AppState, session: &LiveSession) -> App
     )
     .await?;
     let token = super::random_token();
-    Ok(
-        store::finish_session_with_artifact(&state.pool, session.id, ended_at, &token, &archive)
-            .await?,
-    )
+    store::create_session_artifact(&state.pool, session.id, &token, &archive).await
 }
 
 async fn mutate_position(
@@ -965,7 +977,8 @@ mod tests {
         let html = SessionEndedTemplate {
             title: "Intro to Rust".into(),
             slug: "intro-to-rust".into(),
-            share_token: "a".repeat(64),
+            code: "123456".into(),
+            share_token: Some("a".repeat(64)),
         }
         .render()
         .unwrap();
@@ -973,6 +986,21 @@ mod tests {
         assert!(html.contains("/admin/decks/intro-to-rust/edit"));
         assert!(html.contains("href=\"/admin\""));
         assert!(html.contains(&format!("/shared/{}/", "a".repeat(64))));
+    }
+
+    #[test]
+    fn ended_session_offers_archive_retry_when_automatic_creation_fails() {
+        let html = SessionEndedTemplate {
+            title: "Intro to Rust".into(),
+            slug: "intro-to-rust".into(),
+            code: "123456".into(),
+            share_token: None,
+        }
+        .render()
+        .unwrap();
+
+        assert!(html.contains("no longer live"));
+        assert!(html.contains("action=\"/admin/sessions/123456/artifact\""));
     }
 
     #[test]

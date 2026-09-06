@@ -647,10 +647,21 @@ pub async fn artifact_by_token(pool: &SqlitePool, token: &str) -> Result<Option<
     .await?)
 }
 
-pub async fn finish_session_with_artifact(
+pub async fn end_session(pool: &SqlitePool, session_id: i64, ended_at: i64) -> Result<()> {
+    let updated = sqlx::query("UPDATE sessions SET ended_at = COALESCE(ended_at, ?) WHERE id = ?")
+        .bind(ended_at)
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    if updated.rows_affected() == 0 {
+        bail!("session does not exist");
+    }
+    Ok(())
+}
+
+pub async fn create_session_artifact(
     pool: &SqlitePool,
     session_id: i64,
-    ended_at: i64,
     share_token: &str,
     archive: &[u8],
 ) -> Result<String> {
@@ -666,14 +677,6 @@ pub async fn finish_session_with_artifact(
         return Ok(existing);
     }
 
-    let updated = sqlx::query("UPDATE sessions SET ended_at = COALESCE(ended_at, ?) WHERE id = ?")
-        .bind(ended_at)
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
-    if updated.rows_affected() == 0 {
-        bail!("session does not exist");
-    }
     sqlx::query(
         r#"INSERT INTO session_artifacts
            (session_id, share_token, format_version, archive, created_at)
@@ -687,6 +690,18 @@ pub async fn finish_session_with_artifact(
     .await?;
     tx.commit().await?;
     Ok(share_token.to_owned())
+}
+
+#[cfg(test)]
+async fn finish_session_with_artifact(
+    pool: &SqlitePool,
+    session_id: i64,
+    ended_at: i64,
+    share_token: &str,
+    archive: &[u8],
+) -> Result<String> {
+    end_session(pool, session_id, ended_at).await?;
+    create_session_artifact(pool, session_id, share_token, archive).await
 }
 
 pub async fn replace_answer(
@@ -1192,6 +1207,31 @@ mod tests {
             session.code
         );
         assert!(active_session(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn ending_a_session_does_not_require_an_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
+        let pool = connect(&database_url).await.unwrap();
+        let session = start_test_session(&pool, "end-without-archive").await;
+
+        end_session(&pool, session.id, now_millis()).await.unwrap();
+
+        assert!(active_session(&pool).await.unwrap().is_none());
+        assert!(
+            get_session(&pool, session.id)
+                .await
+                .unwrap()
+                .ended_at
+                .is_some()
+        );
+        assert!(
+            artifact_for_session(&pool, session.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

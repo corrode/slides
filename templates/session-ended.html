@@ -12,11 +12,19 @@
     <section class="interaction session-ended-state">
       <p class="status-pill success">Session ended</p>
       <h1>Presentation complete.</h1>
-      <p>The session archive is ready. You can continue editing this presentation or return to the overview.</p>
+      {% if let Some(_) = share_token %}
+        <p>The session archive is ready. You can continue editing this presentation or return to the overview.</p>
+      {% else %}
+        <p>The presentation is no longer live, but its archive could not be created automatically.</p>
+      {% endif %}
       <nav class="session-ended-actions" aria-label="Session actions">
         <a class="button" href="/admin/decks/{{ slug }}/edit">Back to editor</a>
         <a class="button secondary" href="/admin">Presentation overview</a>
-        <a class="button ghost" href="/shared/{{ share_token }}/">View session archive</a>
+        {% if let Some(token) = share_token %}
+          <a class="button ghost" href="/shared/{{ token }}/">View session archive</a>
+        {% else %}
+          <form class="inline-form" method="post" action="/admin/sessions/{{ code }}/artifact"><button class="ghost" type="submit">Retry archive</button></form>
+        {% endif %}
       </nav>
     </section>
   </main>
