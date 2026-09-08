@@ -3,16 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Edit {{ deck.title }} · Slides</title>
+  <title>{% if is_bundle %}Preview{% else %}Edit{% endif %} {{ deck.title }} · Slides</title>
   <script src="/assets/theme.js"></script>
-  <link rel="stylesheet" href="/assets/vendor/codemirror/codemirror.min.css">
+  {% if !is_bundle %}<link rel="stylesheet" href="/assets/vendor/codemirror/codemirror.min.css">{% endif %}
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
+  {% if !is_bundle %}
   <script src="/assets/vendor/codemirror/codemirror.min.js" defer></script>
   <script src="/assets/vendor/codemirror/markdown.min.js" defer></script>
+  {% endif %}
   <script src="/assets/app.js" defer></script>
 </head>
-<body class="editor-page">
+<body class="{% if is_bundle %}admin-page{% else %}editor-page{% endif %}">
+  {% if is_bundle %}
+  <header class="topbar admin-topbar">
+    <nav class="editor-breadcrumb" aria-label="Presentation preview">
+      <a class="brand" href="/admin">Slides</a>
+      <span class="breadcrumb-separator" aria-hidden="true">/</span>
+      <span>{{ deck.title }}</span>
+    </nav>
+    <div class="topbar-actions">
+      <button class="ghost small color-scheme-toggle" type="button" data-color-scheme-toggle aria-label="Change color mode"><span data-color-scheme-icon aria-hidden="true">☀</span><span data-color-scheme-label>Light mode</span></button>
+      <form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/print" target="_blank" rel="noopener"><button class="ghost small" type="submit">Print / PDF</button></form>
+      <form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/publish"><button class="secondary small" type="submit">Publish</button></form>
+      {% match live_code %}
+        {% when Some with (code) %}<a class="button small" href="/present/{{ code }}">Open live session</a>
+        {% when None %}<form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/sessions"><button class="small" type="submit">Present</button></form>
+      {% endmatch %}
+    </div>
+  </header>
+  <main class="admin-shell">
+    <header class="admin-heading">
+      <p class="eyebrow">Bundle draft · Read-only</p>
+      <h1>{{ deck.title }}</h1>
+      <div id="notice" role="status">{{ initial_notice|safe }}</div>
+      <p>Review the stored draft below. Publish makes a version available; Present publishes the draft and starts a live session.</p>
+    </header>
+    <section class="preview-pane" aria-labelledby="preview-pane-title">
+      <header class="pane-header"><h2 id="preview-pane-title">Preview</h2><span>Stored bundle draft</span></header>
+      <div id="preview" class="preview-content">{{ initial_preview|safe }}</div>
+    </section>
+  </main>
+  {% else %}
   <form id="deck-form" method="post" action="/admin/decks/{{ deck.slug }}/save" hx-post="/admin/decks/{{ deck.slug }}/save" hx-trigger="input delay:700ms" hx-target="#notice" hx-swap="innerHTML" hx-sync="this:replace" hx-indicator="#save-indicator">
     <header class="topbar editor-topbar">
       <nav class="editor-breadcrumb" aria-label="Presentation editor">
@@ -151,5 +183,6 @@ Mention the key detail here.
 :::</code></pre></section>
     </div>
   </dialog>
+  {% endif %}
 </body>
 </html>

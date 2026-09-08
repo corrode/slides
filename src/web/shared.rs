@@ -46,7 +46,7 @@ pub async fn archive_file(
     let mut headers = immutable_headers();
     let content_type = content_type(&path);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    if content_type.starts_with("text/html") {
+    if content_type.starts_with("text/html") || content_type == "image/svg+xml" {
         headers.extend(super::iframe_asset_headers());
     }
     Ok((headers, contents).into_response())

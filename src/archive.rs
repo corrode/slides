@@ -353,34 +353,45 @@ fn package(
     font_assets: &BTreeSet<&'static str>,
     iframe_assets: &BTreeSet<String>,
 ) -> Result<Vec<u8>> {
+    let local_assets = local_assets(&page);
+    let mut bundle_assets = iframe_assets.clone();
+    bundle_assets.extend(
+        local_assets
+            .values()
+            .filter(|path| is_bundle_generation_asset(path))
+            .cloned(),
+    );
     let mut packaged_assets = BTreeMap::new();
     package_iframe_bundles(
         asset_root,
         uploaded_embed_root,
-        iframe_assets,
+        &bundle_assets,
         &mut packaged_assets,
     )?;
     let mut missing_assets = Vec::new();
-    for (url, path) in local_assets(&page) {
-        if packaged_assets.contains_key(&path) {
-            page = page.replace(
-                &format!("src=\"/assets/{url}\""),
-                &format!("src=\"assets/{url}\""),
-            );
-            continue;
-        }
-        match std::fs::read(asset_root.join(&path)) {
-            Ok(contents) => {
-                page = page.replace(
-                    &format!("src=\"/assets/{url}\""),
-                    &format!("src=\"assets/{url}\""),
-                );
-                packaged_assets.entry(path).or_insert(contents);
-            }
-            Err(error) => {
-                tracing::warn!(asset = %url, ?error, "could not include local slide asset in archive");
+    for (url, path) in local_assets {
+        if let std::collections::btree_map::Entry::Vacant(entry) = packaged_assets.entry(path) {
+            // Immutable generations must never borrow files from the static asset tree.
+            if is_bundle_generation_asset(entry.key()) {
                 missing_assets.push(url);
+                continue;
             }
+            match std::fs::read(asset_root.join(entry.key())) {
+                Ok(contents) => {
+                    entry.insert(contents);
+                }
+                Err(error) => {
+                    tracing::warn!(asset = %url, ?error, "could not include local slide asset in archive");
+                    missing_assets.push(url);
+                    continue;
+                }
+            }
+        }
+        for attribute in ["src", "href"] {
+            page = page.replace(
+                &format!("{attribute}=\"/assets/{url}\""),
+                &format!("{attribute}=\"assets/{url}\""),
+            );
         }
     }
     if packaged_assets.contains_key("vendor/mermaid/mermaid.min.js") {
@@ -454,15 +465,22 @@ fn package_iframe_bundles(
         let bundle_name = bundle_root
             .file_name()
             .context("iframe bundle path has no directory name")?;
-        let (requested_source, allowed_root) = uploaded_embed_root
-            .map(|root| (root.join(bundle_name), root))
-            .filter(|(source, _)| source.exists())
-            .unwrap_or_else(|| {
-                (
-                    static_embed_root.join(bundle_name),
-                    static_embed_root.as_path(),
-                )
-            });
+        let generation = bundle_name.to_string_lossy().starts_with("bundle-");
+        let (requested_source, allowed_root) = if generation {
+            let root = uploaded_embed_root
+                .context("bundle generations require an uploaded embed directory")?;
+            (root.join(bundle_name), root)
+        } else {
+            uploaded_embed_root
+                .map(|root| (root.join(bundle_name), root))
+                .filter(|(source, _)| source.exists())
+                .unwrap_or_else(|| {
+                    (
+                        static_embed_root.join(bundle_name),
+                        static_embed_root.as_path(),
+                    )
+                })
+        };
         if std::fs::symlink_metadata(&requested_source)?
             .file_type()
             .is_symlink()
@@ -483,12 +501,18 @@ fn package_iframe_bundles(
         if !source.starts_with(&canonical_root) {
             bail!("iframe bundle escapes the embed directory");
         }
+        // The bundle's original deck can contain private presenter notes. Only
+        // export it when explicitly linked, not as an incidental sibling asset.
+        let deck_source = bundle_root.join("slides.md");
+        let exclude_source =
+            generation && !iframe_assets.contains(&archive_path_string(&deck_source)?);
         collect_iframe_bundle(
             &source,
             &bundle_root,
             packaged_assets,
             &mut file_count,
             &mut byte_count,
+            exclude_source.then_some(deck_source.as_path()),
         )?;
     }
     Ok(())
@@ -500,6 +524,7 @@ fn collect_iframe_bundle(
     packaged_assets: &mut BTreeMap<String, Vec<u8>>,
     file_count: &mut usize,
     byte_count: &mut u64,
+    excluded_path: Option<&Path>,
 ) -> Result<()> {
     for entry in std::fs::read_dir(source).with_context(|| {
         format!(
@@ -516,6 +541,9 @@ fn collect_iframe_bundle(
             );
         }
         let child_archive_path = archive_path.join(entry.file_name());
+        if excluded_path == Some(child_archive_path.as_path()) {
+            continue;
+        }
         if file_type.is_dir() {
             collect_iframe_bundle(
                 &entry.path(),
@@ -523,6 +551,7 @@ fn collect_iframe_bundle(
                 packaged_assets,
                 file_count,
                 byte_count,
+                excluded_path,
             )?;
             continue;
         }
@@ -662,23 +691,30 @@ fn write_entry(
 }
 
 fn local_assets(page: &str) -> BTreeMap<String, String> {
-    let marker = "src=\"/assets/";
     let mut assets = BTreeMap::new();
-    let mut remaining = page;
-    while let Some(start) = remaining.find(marker) {
-        remaining = &remaining[start + marker.len()..];
-        let Some(end) = remaining.find('"') else {
-            break;
-        };
-        let candidate = &remaining[..end];
-        let path_end = candidate.find(['?', '#']).unwrap_or(candidate.len());
-        let path = &candidate[..path_end];
-        if safe_relative_path(path) {
-            assets.insert(candidate.to_owned(), path.to_owned());
+    for marker in ["src=\"/assets/", "href=\"/assets/"] {
+        let mut remaining = page;
+        while let Some(start) = remaining.find(marker) {
+            remaining = &remaining[start + marker.len()..];
+            let Some(end) = remaining.find('"') else {
+                break;
+            };
+            let candidate = &remaining[..end];
+            let path_end = candidate.find(['?', '#']).unwrap_or(candidate.len());
+            let path = &candidate[..path_end];
+            if safe_relative_path(path) {
+                assets.insert(candidate.to_owned(), path.to_owned());
+            }
+            remaining = &remaining[end + 1..];
         }
-        remaining = &remaining[end + 1..];
     }
     assets
+}
+
+fn is_bundle_generation_asset(path: &str) -> bool {
+    path.strip_prefix("embeds/")
+        .and_then(|path| path.split_once('/'))
+        .is_some_and(|(directory, _)| directory.starts_with("bundle-"))
 }
 
 fn safe_relative_path(value: &str) -> bool {
@@ -924,6 +960,185 @@ mod tests {
 
         assert!(iframe_html.contains("Uploaded"));
         assert!(!iframe_html.contains("Static"));
+    }
+
+    #[test]
+    fn packages_image_or_link_only_generations_without_private_deck_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("assets");
+        let uploaded = directory.path().join("uploaded");
+        let generation = "bundle-0123456789abcdef0123456789abcdef";
+        let bundle = uploaded.join(generation);
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::create_dir_all(bundle.join("demo")).unwrap();
+        std::fs::write(assets.join("app.css"), "body {}").unwrap();
+        std::fs::write(bundle.join("image.png"), b"image").unwrap();
+        std::fs::write(bundle.join("handout.pdf"), b"handout").unwrap();
+        std::fs::write(
+            bundle.join("slides.md"),
+            "# Deck\n\nPrivate presenter notes",
+        )
+        .unwrap();
+        std::fs::write(bundle.join("demo/slides.md"), "Public demo document").unwrap();
+        std::fs::write(bundle.join("demo/index.html"), "<!doctype html><p>Demo</p>").unwrap();
+
+        for (attribute, file) in [("src", "image.png"), ("href", "handout.pdf")] {
+            let url = format!("embeds/{generation}/{file}?download=1#example");
+            let page = if attribute == "src" {
+                format!("<img src=\"/assets/{url}\">")
+            } else {
+                format!("<a href=\"/assets/{url}\">Handout</a>")
+            };
+            let archive = package(
+                page,
+                b"{}".to_vec(),
+                &assets,
+                Some(&uploaded),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            let index =
+                String::from_utf8(read_entry(&archive, "index.html").unwrap().unwrap()).unwrap();
+            assert!(index.contains(&format!("{attribute}=\"assets/{url}\"")));
+            for sibling in [
+                "image.png",
+                "handout.pdf",
+                "demo/slides.md",
+                "demo/index.html",
+            ] {
+                assert!(
+                    read_entry(&archive, &format!("assets/embeds/{generation}/{sibling}"))
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            assert!(
+                read_entry(&archive, &format!("assets/embeds/{generation}/slides.md"))
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                read_entry(&archive, "missing-assets.txt")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        // An intentional audience link to the original source still works.
+        let archive = package(
+            format!("<a href=\"/assets/embeds/{generation}/slides.md\">Source</a>"),
+            b"{}".to_vec(),
+            &assets,
+            Some(&uploaded),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(
+            read_entry(&archive, &format!("assets/embeds/{generation}/slides.md"))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn archives_the_pinned_generation_not_a_newer_upload() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("assets");
+        let uploaded = directory.path().join("uploaded");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("app.css"), "body {}").unwrap();
+        let generation_a = "bundle-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let generation_b = "bundle-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        for (generation, contents) in [(generation_a, "A"), (generation_b, "B")] {
+            let bundle = uploaded.join(generation);
+            std::fs::create_dir_all(&bundle).unwrap();
+            std::fs::write(bundle.join("image.png"), contents).unwrap();
+            std::fs::write(bundle.join("handout.txt"), contents).unwrap();
+        }
+        let archive = package(
+            format!("<img src=\"/assets/embeds/{generation_a}/image.png\"><a href=\"/assets/embeds/{generation_a}/handout.txt\">Handout</a>"),
+            b"{}".to_vec(),
+            &assets,
+            Some(&uploaded),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let index =
+            String::from_utf8(read_entry(&archive, "index.html").unwrap().unwrap()).unwrap();
+        assert!(index.contains(&format!("src=\"assets/embeds/{generation_a}/image.png\"")));
+        assert!(index.contains(&format!(
+            "href=\"assets/embeds/{generation_a}/handout.txt\""
+        )));
+        for file in ["image.png", "handout.txt"] {
+            assert_eq!(
+                read_entry(&archive, &format!("assets/embeds/{generation_a}/{file}"))
+                    .unwrap()
+                    .unwrap(),
+                b"A"
+            );
+            assert!(
+                read_entry(&archive, &format!("assets/embeds/{generation_b}/{file}"))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_generations_and_generation_files_never_fall_back_to_static_assets() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("assets");
+        let uploaded = directory.path().join("uploaded");
+        let generation = "bundle-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        std::fs::create_dir_all(assets.join("embeds").join(generation)).unwrap();
+        std::fs::create_dir_all(&uploaded).unwrap();
+        std::fs::write(assets.join("app.css"), "body {}").unwrap();
+        std::fs::write(
+            assets.join("embeds").join(generation).join("image.png"),
+            b"Static",
+        )
+        .unwrap();
+        let page = format!("<img src=\"/assets/embeds/{generation}/image.png\">");
+        for root in [None, Some(uploaded.as_path())] {
+            assert!(
+                package(
+                    page.clone(),
+                    b"{}".to_vec(),
+                    &assets,
+                    root,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .is_err()
+            );
+        }
+
+        std::fs::create_dir_all(uploaded.join(generation)).unwrap();
+        let archive = package(
+            page.clone(),
+            b"{}".to_vec(),
+            &assets,
+            Some(&uploaded),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(
+            read_entry(&archive, &format!("assets/embeds/{generation}/image.png"))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            read_entry(&archive, "index.html").unwrap().unwrap(),
+            page.as_bytes()
+        );
+        let missing =
+            String::from_utf8(read_entry(&archive, "missing-assets.txt").unwrap().unwrap())
+                .unwrap();
+        assert!(missing.contains(&format!("embeds/{generation}/image.png")));
     }
 
     #[test]

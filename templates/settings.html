@@ -20,7 +20,7 @@
     <header class="admin-heading">
       <p class="eyebrow">Workspace settings</p>
       <h1>Presentation API</h1>
-      <p>Create and update Slides presentations from an LLM, script, or CI job.</p>
+      <p>Upload complete presentation ZIP bundles from an LLM, script, or CI job.</p>
     </header>
 
     <div class="settings-grid">
@@ -72,28 +72,35 @@
         <h3>Endpoints</h3>
         <dl class="api-endpoints">
           <div><dt><code>GET /api/v1/presentations</code></dt><dd>List presentations.</dd></div>
-          <div><dt><code>POST /api/v1/presentations</code></dt><dd>Create a presentation draft.</dd></div>
+          <div><dt><code>POST /api/v1/presentations/{slug}/bundle</code></dt><dd>Create or replace a draft using a raw ZIP body.</dd></div>
           <div><dt><code>GET /api/v1/presentations/{slug}</code></dt><dd>Read a presentation and its Markdown source.</dd></div>
-          <div><dt><code>PATCH /api/v1/presentations/{slug}</code></dt><dd>Update its title, source, or theme. Slugs are immutable.</dd></div>
+
           <div><dt><code>DELETE /api/v1/presentations/{slug}</code></dt><dd>Delete it unless a live session is active.</dd></div>
-          <div><dt><code>PUT /api/v1/embeds/{bundle}</code></dt><dd>Create or replace a local iframe bundle from a ZIP file.</dd></div>
+
         </dl>
 
         <h3>Upload a presentation draft</h3>
-        <p>Save the generated deck as <code>presentation.json</code>:</p>
-        {{ create_json_example|safe }}
-        {{ create_curl_example|safe }}
-        <p>The <code>slug</code> and <code>theme</code> fields are optional. If omitted, the server derives a unique slug and uses the default theme. Use the slug returned in the response or <code>Location</code> header. Publishing and starting a session remain presenter UI actions.</p>
-        <p>Headline fonts: <code>inter</code>, <code>bebas-neue</code>, <code>happy</code>, <code>merriweather</code>, <code>system</code>, <code>georgia</code>, <code>jetbrains-mono</code>, or <code>system-mono</code>. Text fonts support the same choices except <code>bebas-neue</code>. Code fonts: <code>jetbrains-mono</code> or <code>system-mono</code>. The legacy <code>font</code> field still accepts <code>system</code>, <code>serif</code>, or <code>mono</code>.</p>
+        <p>Save the complete UTF-8 deck as <code>slides.md</code>. Its first H1 supplies the title; keep it nonempty and at most 120 characters. There is no manifest or separate metadata body. Choose the slug in the request URL.</p>
+        <p>Run this from the directory containing <code>slides.md</code>. Python's standard-library ZIP command puts it at the archive root, without a wrapper parent directory:</p>
+        <pre><code>python3 -m zipfile -c presentation.zip slides.md
+curl --fail-with-body --request POST \
+  "$SLIDES_URL/api/v1/presentations/my-talk/bundle" \
+  --header "Authorization: Bearer $SLIDES_API_TOKEN" \
+  --header "Content-Type: application/zip" \
+  --data-binary @presentation.zip</code></pre>
+        <p>For sibling asset directories, use <code>python3 -m zipfile -c presentation.zip slides.md code images demo</code>. Alternatively, if installed, use <code>zip -r presentation.zip slides.md code images demo</code> with a fresh output ZIP. Include only directories that exist; ZIP the contents, not their parent folder.</p>
+        <p>The request body is raw ZIP, not JSON or multipart. Creation returns <code>201 Created</code>; replacing a draft returns <code>200 OK</code>. The JSON response contains <code>slug</code>, <code>title</code>, <code>files</code>, and <code>bytes</code>. The <code>Location</code> header points to the presentation API resource.</p>
 
-        <h3>Update Markdown</h3>
-        {{ update_curl_example|safe }}
-        <p>Create and source updates validate Slides Markdown before saving. Presentation JSON bodies are limited to 2 MiB.</p>
+        <h3>Bundle contents and limits</h3>
+        <p>Include all dependencies in the ZIP. Empty code fences such as <code>```rust code/example.rs</code> followed by a closing fence include the whole UTF-8 file; no line ranges or snippets are supported. Images and local links use paths such as <code>images/diagram.svg</code> and <code>code/example.rs</code>. An HTML embed uses:</p>
+        <pre><code>:::iframe src="demo/index.html" title="Interactive demo"
+:::</code></pre>
+        <p>Local references must exist in the ZIP and are rewritten to immutable generation URLs. HTML can run sandboxed JavaScript, but all scripts, styles, images, fonts, and other resources must be bundled and use relative URLs. External resources and network APIs are blocked. Ordinary Markdown navigation links may still use HTTP(S), mailto, or fragments.</p>
+        <p>Limits: 20 MiB ZIP, 100 MiB extracted, 512 entries including directories, 2 MiB for root <code>slides.md</code>, and 4 MiB per HTML file. Only Stored and Deflated ZIP entries are supported. Symlinks, encrypted entries, duplicate paths, unsupported file extensions, and unsafe paths are rejected. Use ASCII letters, digits, dots, hyphens, and underscores in path segments; no spaces, absolute paths, or traversal.</p>
 
-        <h3>Upload a local iframe bundle</h3>
-        <p>ZIP the contents of the bundle so its HTML entry point is inside the archive, then upload it under the same bundle name used in <code>/assets/embeds/&lt;bundle&gt;/…</code>:</p>
-        {{ upload_embed_curl_example|safe }}
-        <p>ZIP uploads are limited to 20 MiB compressed, 512 entries, 100 MiB extracted, and 4 MiB per HTML file. Bundles must contain an HTML file and cannot contain symbolic links or unsafe paths. Bundle names are global; replacements take effect immediately, so avoid replacing one during a live session.</p>
+        <h3>Replace, then publish</h3>
+        <p>Upload another complete ZIP to the same slug to replace the draft. Each upload installs a new immutable asset generation; replacement never changes published versions or their assets, including during live sessions. Uploading does not publish or start a session.</p>
+        <p>Bundle decks are read-only in the browser: preview, publish, present, and print are available. Existing legacy decks retain browser editing as a migration bridge. Publish and start sessions in the presenter UI.</p>
         <p>JSON errors include a stable <code>error.code</code> and human-readable <code>error.message</code>.</p>
       </section>
     </div>

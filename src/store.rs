@@ -141,6 +141,7 @@ pub async fn list_ended_sessions(pool: &SqlitePool) -> Result<Vec<EndedSessionSu
     .await?)
 }
 
+#[cfg(test)]
 pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<Deck> {
     let source = format!(
         "# {title}\n\nYour presentation starts here.\n\n---\n\n# Ask the audience\n\n:::poll question=\"Which option do you prefer?\"\n- The first option\n- The second option\n:::"
@@ -148,6 +149,7 @@ pub async fn create_deck(pool: &SqlitePool, slug: &str, title: &str) -> Result<D
     create_deck_with_content(pool, slug, title, &source, &Theme::default()).await
 }
 
+#[cfg(test)]
 pub async fn create_deck_with_content(
     pool: &SqlitePool,
     slug: &str,
@@ -203,6 +205,104 @@ pub async fn deck_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<Deck>>
     .await?)
 }
 
+/// Install a fully validated generation without changing any published version.
+pub async fn install_bundle_draft(
+    pool: &SqlitePool,
+    slug: &str,
+    title: &str,
+    source: &str,
+    generation: &str,
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    let theme = Theme::default();
+    let inserted = sqlx::query(
+        r#"INSERT INTO decks (slug, title, draft_source, theme_font,
+            theme_headline_font, theme_text_font, theme_code_font,
+            theme_background, theme_text, theme_accent, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(slug) DO NOTHING"#,
+    )
+    .bind(slug)
+    .bind(title)
+    .bind(source)
+    .bind(legacy_font_id(&theme.headline_font))
+    .bind(&theme.headline_font)
+    .bind(&theme.text_font)
+    .bind(&theme.code_font)
+    .bind(&theme.background)
+    .bind(&theme.text)
+    .bind(&theme.accent)
+    .bind(now_millis())
+    .bind(now_millis())
+    .execute(&mut *tx)
+    .await?;
+    let deck_id: i64 = sqlx::query_scalar(
+        "UPDATE decks SET title = ?, draft_source = ?, updated_at = ? WHERE slug = ? RETURNING id",
+    )
+    .bind(title)
+    .bind(source)
+    .bind(now_millis())
+    .bind(slug)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO presentation_bundles (generation, deck_id) VALUES (?, ?)")
+        .bind(generation)
+        .bind(deck_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        r#"INSERT INTO bundle_drafts (deck_id, generation) VALUES (?, ?)
+           ON CONFLICT(deck_id) DO UPDATE SET generation = excluded.generation"#,
+    )
+    .bind(deck_id)
+    .bind(generation)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(inserted.rows_affected() > 0)
+}
+
+pub async fn is_bundle_deck(pool: &SqlitePool, deck_id: i64) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bundle_drafts WHERE deck_id = ?)")
+            .bind(deck_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub async fn bundle_exists(pool: &SqlitePool, generation: &str) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM presentation_bundles WHERE generation = ?)",
+        )
+        .bind(generation)
+        .fetch_one(pool)
+        .await?,
+    )
+}
+
+/// Snapshot the persisted bundle draft in one write statement, avoiding stale form data.
+pub async fn publish_bundle_deck(pool: &SqlitePool, deck_id: i64) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        r#"INSERT INTO deck_versions
+           (deck_id, version_number, title, source, theme_font, theme_headline_font,
+            theme_text_font, theme_code_font, theme_background, theme_text, theme_accent,
+            show_join_code, published_at)
+           SELECT d.id, (SELECT COALESCE(MAX(version_number), 0) + 1
+                         FROM deck_versions WHERE deck_id = d.id),
+                  d.title, d.draft_source, d.theme_font, d.theme_headline_font,
+                  d.theme_text_font, d.theme_code_font, d.theme_background, d.theme_text,
+                  d.theme_accent, 0, ?
+           FROM decks d JOIN bundle_drafts b ON b.deck_id = d.id WHERE d.id = ?
+           RETURNING id"#,
+    )
+    .bind(now_millis())
+    .bind(deck_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 pub async fn save_deck(
     pool: &SqlitePool,
     id: i64,
@@ -210,12 +310,12 @@ pub async fn save_deck(
     source: &str,
     theme: &Theme,
 ) -> Result<()> {
-    sqlx::query(
+    let updated = sqlx::query(
         r#"UPDATE decks
            SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
                theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
-           WHERE id = ?"#,
+           WHERE id = ? AND NOT EXISTS (SELECT 1 FROM bundle_drafts WHERE deck_id = decks.id)"#,
     )
     .bind(title)
     .bind(source)
@@ -230,6 +330,10 @@ pub async fn save_deck(
     .bind(id)
     .execute(pool)
     .await?;
+    anyhow::ensure!(
+        updated.rows_affected() == 1,
+        "Bundle drafts can only be replaced by upload"
+    );
     Ok(())
 }
 
@@ -243,12 +347,12 @@ pub async fn save_and_publish_deck(
 ) -> Result<i64> {
     let now = now_millis();
     let mut tx = pool.begin().await?;
-    sqlx::query(
+    let updated = sqlx::query(
         r#"UPDATE decks
            SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
                theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
-           WHERE id = ?"#,
+           WHERE id = ? AND NOT EXISTS (SELECT 1 FROM bundle_drafts WHERE deck_id = decks.id)"#,
     )
     .bind(title)
     .bind(draft_source)
@@ -264,6 +368,10 @@ pub async fn save_and_publish_deck(
     .execute(&mut *tx)
     .await?;
 
+    anyhow::ensure!(
+        updated.rows_affected() == 1,
+        "Bundle drafts must be published from stored contents"
+    );
     let version_number: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM deck_versions WHERE deck_id = ?",
     )

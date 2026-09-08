@@ -1,7 +1,7 @@
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, State, rejection::FormRejection},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -38,6 +38,7 @@ struct DashboardTemplate {
 #[template(path = "editor.html")]
 struct EditorTemplate {
     deck: Deck,
+    is_bundle: bool,
     live_code: Option<String>,
     initial_notice: String,
     initial_preview: String,
@@ -54,12 +55,6 @@ struct PrintTemplate {
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
     password: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct NewDeckForm {
-    title: String,
-    slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,57 +141,6 @@ pub async fn delete_ended_session(
     Ok(Redirect::to("/admin").into_response())
 }
 
-pub async fn create_deck(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Form(form): Form<NewDeckForm>,
-) -> AppResult<Response> {
-    require_admin(&jar, &state)?;
-    let title = form.title.trim();
-    validate_title(title)?;
-    let slug = match form
-        .slug
-        .as_deref()
-        .map(str::trim)
-        .filter(|slug| !slug.is_empty())
-    {
-        Some(slug) => {
-            let slug = slug.to_ascii_lowercase();
-            validate_slug(&slug)?;
-            slug
-        }
-        None => {
-            let base = slugify_title(title).ok_or_else(|| {
-                AppError::bad_request(
-                    "Enter a shortlink for titles without ASCII letters or numbers.",
-                )
-            })?;
-            available_slug(&state, &base).await?
-        }
-    };
-    let deck = store::create_deck(&state.pool, &slug, title)
-        .await
-        .map_err(|error| {
-            if error.to_string().contains("UNIQUE constraint failed") {
-                AppError::bad_request("That shortlink is already in use.")
-            } else {
-                error.into()
-            }
-        })?;
-    let location = format!("/admin/decks/{}/edit", deck.slug);
-    if headers.contains_key("hx-request") {
-        let mut response = StatusCode::NO_CONTENT.into_response();
-        response.headers_mut().insert(
-            "hx-redirect",
-            HeaderValue::from_str(&location).expect("deck edit path is a valid header value"),
-        );
-        Ok(response)
-    } else {
-        Ok(Redirect::to(&location).into_response())
-    }
-}
-
 pub async fn editor(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -209,10 +153,15 @@ pub async fn editor(
     let live_code = store::active_session(&state.pool)
         .await?
         .map(|session| session.code);
+    let is_bundle = store::is_bundle_deck(&state.pool, deck.id).await?;
     let (initial_preview, initial_notice) = match parse_deck(&deck.draft_source) {
         Ok(document) => (
             render::preview(&document, &Theme::from(&deck)),
-            "<span>Changes save automatically.</span>".into(),
+            if is_bundle {
+                "<span>Read-only bundle draft. Upload a new bundle through the API to make changes.</span>".into()
+            } else {
+                "<span>Changes save automatically.</span>".into()
+            },
         ),
         Err(error) => (
             "<div class=\"empty-state\">Preview unavailable until the Markdown is valid.</div>"
@@ -225,6 +174,7 @@ pub async fn editor(
     };
     template(EditorTemplate {
         deck,
+        is_bundle,
         live_code,
         initial_notice,
         initial_preview,
@@ -235,10 +185,19 @@ pub async fn save(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
-    Form(form): Form<DeckForm>,
+    form: Result<Form<DeckForm>, FormRejection>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
+    if store::is_bundle_deck(&state.pool, deck.id).await? {
+        return Err(AppError::bad_request(
+            "Bundle decks are read-only. Upload a new bundle through the API to make changes.",
+        ));
+    }
+    let Form(form) = match form {
+        Ok(form) => form,
+        Err(error) => return Ok(error.into_response()),
+    };
     validate_draft_form(&form)?;
     let theme = theme_from_form(&form);
     store::save_deck(
@@ -276,10 +235,23 @@ pub async fn print_deck(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
-    Form(form): Form<DeckForm>,
+    form: Result<Form<DeckForm>, FormRejection>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
-    required_deck(&state, &slug).await?;
+    let deck = required_deck(&state, &slug).await?;
+    if store::is_bundle_deck(&state.pool, deck.id).await? {
+        let document = parse_deck(&deck.draft_source)
+            .map_err(|error| AppError::bad_request(error.to_string()))?;
+        return template(PrintTemplate {
+            theme_style: Theme::from(&deck).style(),
+            title: deck.title,
+            slides: render::printable(&document),
+        });
+    }
+    let Form(form) = match form {
+        Ok(form) => form,
+        Err(error) => return Ok(error.into_response()),
+    };
     validate_deck_form(&form)?;
     let document =
         parse_deck(&form.source).map_err(|error| AppError::bad_request(error.to_string()))?;
@@ -296,24 +268,19 @@ pub async fn publish(
     jar: CookieJar,
     Path(slug): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<DeckForm>,
+    form: Result<Form<DeckForm>, FormRejection>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    validate_deck_form(&form)?;
-    let published_source = resolve_code_references(&form.source)
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
-    let theme = theme_from_form(&form);
-    store::save_and_publish_deck(
-        &state.pool,
-        deck.id,
-        form.title.trim(),
-        &form.source,
-        &published_source,
-        &theme,
-    )
-    .await?;
+    if store::is_bundle_deck(&state.pool, deck.id).await? {
+        store::publish_bundle_deck(&state.pool, deck.id).await?;
+    } else {
+        let Form(form) = match form {
+            Ok(form) => form,
+            Err(error) => return Ok(error.into_response()),
+        };
+        publish_legacy_form(&state, deck.id, &form).await?;
+    }
     if headers.contains_key("hx-request") {
         let mut response = StatusCode::NO_CONTENT.into_response();
         response
@@ -329,29 +296,41 @@ pub async fn start_session(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
-    Form(form): Form<DeckForm>,
+    form: Result<Form<DeckForm>, FormRejection>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     if let Some(session) = store::active_session(&state.pool).await? {
         return Ok(Redirect::to(&format!("/present/{}", session.code)).into_response());
     }
-    validate_deck_form(&form)?;
+    let version_id = if store::is_bundle_deck(&state.pool, deck.id).await? {
+        store::publish_bundle_deck(&state.pool, deck.id).await?
+    } else {
+        let Form(form) = match form {
+            Ok(form) => form,
+            Err(error) => return Ok(error.into_response()),
+        };
+        publish_legacy_form(&state, deck.id, &form).await?
+    };
+    let session = store::start_session(&state.pool, deck.id, version_id).await?;
+    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
+}
+
+async fn publish_legacy_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<i64> {
+    validate_deck_form(form)?;
     let published_source = resolve_code_references(&form.source)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     parse_deck(&published_source).map_err(|error| AppError::bad_request(error.to_string()))?;
-    let theme = theme_from_form(&form);
-    let version_id = store::save_and_publish_deck(
+    let theme = theme_from_form(form);
+    Ok(store::save_and_publish_deck(
         &state.pool,
-        deck.id,
+        deck_id,
         form.title.trim(),
         &form.source,
         &published_source,
         &theme,
     )
-    .await?;
-    let session = store::start_session(&state.pool, deck.id, version_id).await?;
-    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
+    .await?)
 }
 
 fn validate_deck_form(form: &DeckForm) -> AppResult<()> {
@@ -409,73 +388,6 @@ fn validate_title(title: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_slug(slug: &str) -> AppResult<()> {
-    const RESERVED: &[&str] = &[
-        "admin", "api", "assets", "healthz", "join", "present", "sessions",
-    ];
-    let valid = (1..=48).contains(&slug.len())
-        && slug
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !slug.starts_with('-')
-        && !slug.ends_with('-')
-        && !RESERVED.contains(&slug);
-    if !valid {
-        return Err(AppError::bad_request(
-            "Shortlinks must be 1–48 lowercase letters, numbers, or hyphens.",
-        ));
-    }
-    Ok(())
-}
-
-fn slugify_title(title: &str) -> Option<String> {
-    let mut slug = String::new();
-    let mut pending_separator = false;
-
-    for character in title.chars() {
-        if character.is_ascii_alphanumeric() {
-            if pending_separator && !slug.is_empty() {
-                if slug.len() + 2 > 48 {
-                    break;
-                }
-                slug.push('-');
-            }
-            if slug.len() == 48 {
-                break;
-            }
-            slug.push(character.to_ascii_lowercase());
-            pending_separator = false;
-        } else if !slug.is_empty() {
-            pending_separator = true;
-        }
-    }
-
-    (!slug.is_empty()).then_some(slug)
-}
-
-async fn available_slug(state: &AppState, base: &str) -> AppResult<String> {
-    if validate_slug(base).is_ok() && store::deck_by_slug(&state.pool, base).await?.is_none() {
-        return Ok(base.to_owned());
-    }
-
-    for number in 2..=9_999 {
-        let suffix = format!("-{number}");
-        let base_length = (48 - suffix.len()).min(base.len());
-        let root = base[..base_length].trim_end_matches('-');
-        let candidate = format!("{root}{suffix}");
-        if store::deck_by_slug(&state.pool, &candidate)
-            .await?
-            .is_none()
-        {
-            return Ok(candidate);
-        }
-    }
-
-    Err(AppError::bad_request(
-        "Could not derive an unused shortlink. Enter one explicitly.",
-    ))
-}
-
 async fn required_deck(state: &AppState, slug: &str) -> AppResult<Deck> {
     store::deck_by_slug(&state.pool, slug)
         .await?
@@ -488,11 +400,10 @@ mod tests {
 
     use crate::models::Deck;
 
-    use super::{EditorTemplate, slugify_title, validate_slug};
+    use super::EditorTemplate;
 
-    #[test]
-    fn presentation_start_uses_a_native_form_submission() {
-        let template = EditorTemplate {
+    fn editor_template(is_bundle: bool) -> EditorTemplate {
+        EditorTemplate {
             deck: Deck {
                 id: 1,
                 slug: "demo".into(),
@@ -505,11 +416,21 @@ mod tests {
                 theme_text: "#e1e1e1".into(),
                 theme_accent: "#fc218a".into(),
             },
+            is_bundle,
             live_code: None,
             initial_notice: String::new(),
-            initial_preview: String::new(),
-        };
+            initial_preview: "<p>Stored preview</p>".into(),
+        }
+    }
+
+    #[test]
+    fn presentation_start_uses_a_native_form_submission() {
+        let template = editor_template(false);
         let html = template.render().unwrap();
+        assert!(html.contains("name=\"source\""));
+        assert!(html.contains("name=\"title\""));
+        assert!(html.contains("name=\"headline_font\""));
+        assert!(html.contains("hx-post=\"/admin/decks/demo/save\""));
 
         assert!(html.contains(
             "type=\"submit\" formmethod=\"post\" formaction=\"/admin/decks/demo/sessions\""
@@ -528,30 +449,51 @@ mod tests {
     }
 
     #[test]
-    fn derives_clean_shortlinks_from_titles() {
-        assert_eq!(
-            slugify_title("  Rust   + Axum & SQLite! ").as_deref(),
-            Some("rust-axum-sqlite")
-        );
-        assert_eq!(slugify_title("2026").as_deref(), Some("2026"));
-        assert_eq!(slugify_title("---"), None);
-    }
-
-    #[test]
-    fn route_names_are_not_valid_shortlinks() {
-        assert!(validate_slug("healthz").is_err());
-        assert!(validate_slug("admin").is_err());
-        assert!(validate_slug("api").is_err());
-        assert!(validate_slug("my-healthz-talk").is_ok());
-    }
-
-    #[test]
-    fn derived_shortlinks_do_not_exceed_the_limit() {
-        let slug = slugify_title(
-            "A very long presentation title with many words that cannot fit into one shortlink",
-        )
+    fn bundle_preview_has_only_read_only_native_actions() {
+        let template = editor_template(true);
+        let html = template.render().unwrap();
+        assert!(html.contains("<p>Stored preview</p>"));
+        for action in ["publish", "sessions", "print"] {
+            assert!(html.contains(&format!(
+                "method=\"post\" action=\"/admin/decks/demo/{action}\""
+            )));
+        }
+        for editing_control in [
+            "name=\"title\"",
+            "name=\"source\"",
+            "<textarea",
+            "<select",
+            "type=\"color\"",
+            "data-markdown-editor",
+            "data-editor-split",
+            "/admin/decks/demo/save",
+            "codemirror",
+            "hx-post=",
+        ] {
+            assert!(!html.contains(editing_control), "found {editing_control}");
+        }
+        let live_html = EditorTemplate {
+            live_code: Some("123456".into()),
+            ..template
+        }
+        .render()
         .unwrap();
-        assert!(slug.len() <= 48);
-        assert!(!slug.ends_with('-'));
+        assert!(live_html.contains("href=\"/present/123456\""));
+        assert!(!live_html.contains("action=\"/admin/decks/demo/sessions\""));
+        assert!(live_html.contains("action=\"/admin/decks/demo/publish\""));
+    }
+
+    #[test]
+    fn dashboard_directs_new_decks_to_api_uploads() {
+        let html = super::DashboardTemplate {
+            decks: Vec::new(),
+            ended_sessions: Vec::new(),
+        }
+        .render()
+        .unwrap();
+        assert!(html.contains("Upload your first presentation"));
+        assert!(html.contains("href=\"/admin/settings\""));
+        assert!(!html.contains("action=\"/admin/decks\""));
+        assert!(!html.contains("create-presentation"));
     }
 }

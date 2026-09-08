@@ -1,105 +1,34 @@
-use std::{
-    fs,
-    io::{Cursor, Read},
-    path::{Component, Path as FilePath, PathBuf},
-};
+use std::{fs, path::Path as FilePath};
 
-use anyhow::anyhow;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, FromRequestParts, Path, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
-use zip::ZipArchive;
 
 use crate::{
-    markdown::parse_deck,
-    models::{
-        CODE_FONT_IDS, DEFAULT_CODE_FONT, DEFAULT_HEADLINE_FONT, DEFAULT_TEXT_FONT,
-        DEFAULT_THEME_ACCENT, DEFAULT_THEME_BACKGROUND, DEFAULT_THEME_TEXT, Deck, DeckSummary,
-        HEADLINE_FONT_IDS, TEXT_FONT_IDS, Theme, legacy_font_id, valid_code_font,
-        valid_headline_font, valid_text_font,
-    },
+    bundle::{self, Bundle, BundleError},
+    models::{Deck, DeckSummary, legacy_font_id},
     store,
 };
 
 use super::{AppState, hash};
 
-const MAX_API_BODY_BYTES: usize = 2 * 1024 * 1024;
-const MAX_EMBED_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
-const MAX_EMBED_BUNDLE_FILES: usize = 512;
-const MAX_EMBED_BUNDLE_BYTES: u64 = 100 * 1024 * 1024;
-const MAX_EMBED_HTML_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_BUNDLE_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/presentations", get(list).post(create))
+        .route("/presentations", get(list))
+        .route("/presentations/{slug}", get(get_one).delete(delete))
         .route(
-            "/presentations/{slug}",
-            get(get_one).patch(update).delete(delete),
+            "/presentations/{slug}/bundle",
+            post(upload_bundle).layer(DefaultBodyLimit::max(MAX_BUNDLE_UPLOAD_BYTES)),
         )
-        .layer(DefaultBodyLimit::max(MAX_API_BODY_BYTES))
-        .route(
-            "/embeds/{bundle}",
-            put(upload_embed).layer(DefaultBodyLimit::max(MAX_EMBED_UPLOAD_BYTES)),
-        )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CreatePresentation {
-    title: String,
-    #[serde(default)]
-    slug: Option<String>,
-    source: String,
-    #[serde(default)]
-    theme: ThemeInput,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct ThemeInput {
-    font: Option<String>,
-    headline_font: Option<String>,
-    text_font: Option<String>,
-    code_font: Option<String>,
-    background: Option<String>,
-    text: Option<String>,
-    accent: Option<String>,
-}
-
-impl ThemeInput {
-    fn is_empty(&self) -> bool {
-        self.font.is_none()
-            && self.headline_font.is_none()
-            && self.text_font.is_none()
-            && self.code_font.is_none()
-            && self.background.is_none()
-            && self.text.is_none()
-            && self.accent.is_none()
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct UpdatePresentation {
-    title: Option<String>,
-    source: Option<String>,
-    #[serde(default)]
-    theme: Option<ThemeInput>,
-}
-
-impl UpdatePresentation {
-    fn is_empty(&self) -> bool {
-        self.title.is_none()
-            && self.source.is_none()
-            && self.theme.as_ref().is_none_or(ThemeInput::is_empty)
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -146,11 +75,11 @@ impl From<&Deck> for Presentation {
 }
 
 #[derive(Debug, Serialize)]
-struct EmbedUpload {
-    bundle: String,
+struct BundleUpload {
+    slug: String,
+    title: String,
     files: usize,
     bytes: u64,
-    url_prefix: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +133,14 @@ impl ApiError {
         }
     }
 
+    fn too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: message.into(),
+        }
+    }
+
     fn not_found() -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -220,14 +157,6 @@ impl ApiError {
         }
     }
 
-    fn invalid_json(error: JsonRejection) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "invalid_json",
-            message: error.body_text(),
-        }
-    }
-
     fn internal(error: impl Into<anyhow::Error>) -> Self {
         let error = error.into();
         tracing::error!(?error, "API request failed");
@@ -235,6 +164,16 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
             message: "Something went wrong while processing the request.".into(),
+        }
+    }
+}
+
+impl From<BundleError> for ApiError {
+    fn from(error: BundleError) -> Self {
+        match error {
+            BundleError::Invalid(message) => Self::validation(message),
+            BundleError::TooLarge(message) => Self::too_large(message),
+            BundleError::Internal(error) => Self::internal(error),
         }
     }
 }
@@ -272,52 +211,128 @@ impl IntoResponse for ApiError {
     }
 }
 
-async fn upload_embed(
+async fn upload_bundle(
     State(state): State<AppState>,
     _authorization: ApiAuthorization,
-    Path(bundle): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, Json<EmbedUpload>), ApiError> {
-    let bundle = normalized_bundle_name(&bundle)?;
-    let content_type = headers
+    Path(slug): Path<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let slug = normalized_slug(&slug)?;
+    let content_type = request
+        .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
         .map(str::trim);
-    if !matches!(
-        content_type,
-        Some("application/zip" | "application/x-zip-compressed")
-    ) {
-        return Err(ApiError::validation(
-            "Embed bundles must use Content-Type: application/zip.",
-        ));
+    if !content_type.is_some_and(|value| value.eq_ignore_ascii_case("application/zip")) {
+        return Err(ApiError {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            code: "unsupported_media_type",
+            message: "Bundles must use Content-Type: application/zip.".into(),
+        });
     }
-    if body.is_empty() {
-        return Err(ApiError::validation("The embed ZIP cannot be empty."));
-    }
+    let body = Bytes::from_request(request, &state)
+        .await
+        .map_err(|error| {
+            if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                ApiError::too_large("ZIP upload exceeds 20 MiB.")
+            } else {
+                ApiError::validation(error.body_text())
+            }
+        })?;
 
-    let embed_dir = state.embed_dir.clone();
-    let install_bundle = bundle.clone();
-    let stats = tokio::task::spawn_blocking(move || {
-        install_embed_bundle(&embed_dir, &install_bundle, body.as_ref())
+    // Dropping the request must not cancel a DB commit or remove committed assets.
+    // This task owns installation and explicit rollback, even after disconnection.
+    let (created, upload) = tokio::spawn(async move {
+        let generation = format!("bundle-{:032x}", rand::random::<u128>());
+        let embed_dir = state.embed_dir.clone();
+        let extract_generation = generation.clone();
+        let (bundle, destination) = tokio::task::spawn_blocking(move || {
+            install_bundle_files(&embed_dir, &extract_generation, &body)
+        })
+        .await
+        .map_err(ApiError::internal)??;
+
+        let created = match store::install_bundle_draft(
+            &state.pool,
+            &slug,
+            &bundle.title,
+            &bundle.source,
+            &generation,
+        )
+        .await
+        {
+            Ok(created) => created,
+            Err(error) => {
+                let _ = tokio::task::spawn_blocking(move || remove_directory(&destination)).await;
+                return Err(ApiError::internal(error));
+            }
+        };
+        Ok::<_, ApiError>((
+            created,
+            BundleUpload {
+                slug,
+                title: bundle.title,
+                files: bundle.files,
+                bytes: bundle.bytes,
+            },
+        ))
     })
     .await
-    .map_err(|error| ApiError::internal(anyhow!(error)))?
-    .map_err(|error| match error {
-        EmbedInstallError::Invalid(message) => ApiError::validation(message),
-        EmbedInstallError::Internal(error) => ApiError::internal(error),
-    })?;
+    .map_err(ApiError::internal)??;
 
+    let location = HeaderValue::from_str(&format!("/api/v1/presentations/{}", upload.slug))
+        .map_err(ApiError::internal)?;
     Ok((
-        StatusCode::CREATED,
-        Json(EmbedUpload {
-            url_prefix: format!("/assets/embeds/{bundle}/"),
-            bundle,
-            files: stats.files,
-            bytes: stats.bytes,
-        }),
-    ))
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        [(header::LOCATION, location)],
+        Json(upload),
+    )
+        .into_response())
+}
+
+fn install_bundle_files(
+    embed_root: &FilePath,
+    generation: &str,
+    bytes: &[u8],
+) -> Result<(Bundle, std::path::PathBuf), ApiError> {
+    fs::create_dir_all(embed_root).map_err(ApiError::internal)?;
+    let embed_root = fs::canonicalize(embed_root).map_err(ApiError::internal)?;
+    let parent = embed_root.parent().ok_or_else(|| {
+        ApiError::internal(anyhow::anyhow!("embed root must have a parent directory"))
+    })?;
+    let temporary = parent.join(format!(".{generation}.upload"));
+    let destination = embed_root.join(generation);
+    fs::create_dir(&temporary).map_err(ApiError::internal)?;
+    let result = (|| {
+        let bundle = bundle::extract(bytes, &temporary, generation).map_err(ApiError::from)?;
+        // Generations are immutable; never replace an existing directory.
+        if fs::symlink_metadata(&destination).is_ok() {
+            return Err(ApiError::internal(anyhow::anyhow!(
+                "bundle generation already exists"
+            )));
+        }
+        fs::rename(&temporary, &destination).map_err(ApiError::internal)?;
+        Ok((bundle, destination))
+    })();
+    if result.is_err() {
+        remove_directory(&temporary);
+    }
+    result
+}
+
+fn remove_directory(path: &FilePath) {
+    if let Err(error) = fs::remove_dir_all(path) {
+        tracing::warn!(
+            ?error,
+            ?path,
+            "Could not clean up failed bundle installation"
+        );
+    }
 }
 
 async fn list(
@@ -333,92 +348,12 @@ async fn list(
     Ok(Json(PresentationList { presentations }))
 }
 
-async fn create(
-    State(state): State<AppState>,
-    _authorization: ApiAuthorization,
-    payload: Result<Json<CreatePresentation>, JsonRejection>,
-) -> Result<Response, ApiError> {
-    let Json(payload) = payload.map_err(ApiError::invalid_json)?;
-    let title = normalized_title(&payload.title)?;
-    validate_source(&payload.source)?;
-    let slug = match payload
-        .slug
-        .as_deref()
-        .map(str::trim)
-        .filter(|slug| !slug.is_empty())
-    {
-        Some(slug) => normalized_slug(slug)?,
-        None => available_slug(&state, &title).await?,
-    };
-    let theme = merged_theme(None, payload.theme)?;
-
-    let deck = store::create_deck_with_content(&state.pool, &slug, &title, &payload.source, &theme)
-        .await
-        .map_err(|error| {
-            if error.to_string().contains("UNIQUE constraint failed") {
-                ApiError::conflict("That presentation slug is already in use.")
-            } else {
-                ApiError::internal(error)
-            }
-        })?;
-
-    let location = format!("/api/v1/presentations/{}", deck.slug);
-    let mut response = (StatusCode::CREATED, Json(Presentation::from(&deck))).into_response();
-    response.headers_mut().insert(
-        header::LOCATION,
-        HeaderValue::from_str(&location).expect("API presentation path is a valid header value"),
-    );
-    Ok(response)
-}
-
 async fn get_one(
     State(state): State<AppState>,
     _authorization: ApiAuthorization,
     Path(slug): Path<String>,
 ) -> Result<Json<Presentation>, ApiError> {
     let deck = required_deck(&state, &slug).await?;
-    Ok(Json(Presentation::from(&deck)))
-}
-
-async fn update(
-    State(state): State<AppState>,
-    _authorization: ApiAuthorization,
-    Path(slug): Path<String>,
-    payload: Result<Json<UpdatePresentation>, JsonRejection>,
-) -> Result<Json<Presentation>, ApiError> {
-    let Json(payload) = payload.map_err(ApiError::invalid_json)?;
-    if payload.is_empty() {
-        return Err(ApiError::validation(
-            "Provide at least one field to update.",
-        ));
-    }
-
-    let mut deck = required_deck(&state, &slug).await?;
-    if let Some(title) = payload.title {
-        deck.title = normalized_title(&title)?;
-    }
-    if let Some(source) = payload.source {
-        validate_source(&source)?;
-        deck.draft_source = source;
-    }
-    let theme = merged_theme(Some(&deck), payload.theme.unwrap_or_default())?;
-    deck.theme_headline_font = theme.headline_font.clone();
-    deck.theme_text_font = theme.text_font.clone();
-    deck.theme_code_font = theme.code_font.clone();
-    deck.theme_background = theme.background.clone();
-    deck.theme_text = theme.text.clone();
-    deck.theme_accent = theme.accent.clone();
-
-    store::save_deck(
-        &state.pool,
-        deck.id,
-        &deck.title,
-        &deck.draft_source,
-        &theme,
-    )
-    .await
-    .map_err(ApiError::internal)?;
-
     Ok(Json(Presentation::from(&deck)))
 }
 
@@ -469,19 +404,9 @@ async fn required_deck(state: &AppState, slug: &str) -> Result<Deck, ApiError> {
         .ok_or_else(ApiError::not_found)
 }
 
-fn normalized_title(title: &str) -> Result<String, ApiError> {
-    let title = title.trim();
-    if title.is_empty() || title.chars().count() > 120 {
-        return Err(ApiError::validation(
-            "Titles must contain between 1 and 120 characters.",
-        ));
-    }
-    Ok(title.into())
-}
-
 fn normalized_slug(slug: &str) -> Result<String, ApiError> {
     const RESERVED: &[&str] = &[
-        "admin", "api", "assets", "healthz", "join", "present", "sessions",
+        "admin", "api", "assets", "healthz", "join", "present", "sessions", "shared",
     ];
     let slug = slug.to_ascii_lowercase();
     let valid = (1..=48).contains(&slug.len())
@@ -493,346 +418,29 @@ fn normalized_slug(slug: &str) -> Result<String, ApiError> {
         && !RESERVED.contains(&slug.as_str());
     if !valid {
         return Err(ApiError::validation(
-            "Slugs must be 1–48 lowercase letters, numbers, or hyphens.",
+            "Slugs must be 1–48 lowercase letters, numbers, or hyphens, and not reserved.",
         ));
     }
     Ok(slug)
 }
 
-fn slugify_title(title: &str) -> Option<String> {
-    let mut slug = String::new();
-    let mut pending_separator = false;
-    for character in title.chars() {
-        if character.is_ascii_alphanumeric() {
-            if pending_separator && !slug.is_empty() {
-                if slug.len() + 2 > 48 {
-                    break;
-                }
-                slug.push('-');
-            }
-            if slug.len() == 48 {
-                break;
-            }
-            slug.push(character.to_ascii_lowercase());
-            pending_separator = false;
-        } else if !slug.is_empty() {
-            pending_separator = true;
-        }
-    }
-    (!slug.is_empty()).then_some(slug)
-}
-
-async fn available_slug(state: &AppState, title: &str) -> Result<String, ApiError> {
-    let base = slugify_title(title).ok_or_else(|| {
-        ApiError::validation("Provide a slug for titles without ASCII letters or numbers.")
-    })?;
-    if normalized_slug(&base).is_ok()
-        && store::deck_by_slug(&state.pool, &base)
-            .await
-            .map_err(ApiError::internal)?
-            .is_none()
-    {
-        return Ok(base);
-    }
-
-    for number in 2..=9_999 {
-        let suffix = format!("-{number}");
-        let base_length = (48 - suffix.len()).min(base.len());
-        let root = base[..base_length].trim_end_matches('-');
-        let candidate = format!("{root}{suffix}");
-        if store::deck_by_slug(&state.pool, &candidate)
-            .await
-            .map_err(ApiError::internal)?
-            .is_none()
-        {
-            return Ok(candidate);
-        }
-    }
-    Err(ApiError::conflict(
-        "Could not derive an unused slug. Provide one explicitly.",
-    ))
-}
-
-fn validate_source(source: &str) -> Result<(), ApiError> {
-    if source.trim().is_empty() {
-        return Err(ApiError::validation(
-            "The presentation source cannot be empty.",
-        ));
-    }
-    parse_deck(source).map_err(|error| ApiError::validation(error.to_string()))?;
-    Ok(())
-}
-
-fn merged_theme(existing: Option<&Deck>, update: ThemeInput) -> Result<Theme, ApiError> {
-    let legacy_fonts = update.font.as_deref().map(legacy_font_pair).transpose()?;
-    let theme = Theme {
-        headline_font: update
-            .headline_font
-            .or_else(|| legacy_fonts.map(|fonts| fonts.0.into()))
-            .or_else(|| existing.map(|deck| deck.theme_headline_font.clone()))
-            .unwrap_or_else(|| DEFAULT_HEADLINE_FONT.into()),
-        text_font: update
-            .text_font
-            .or_else(|| legacy_fonts.map(|fonts| fonts.1.into()))
-            .or_else(|| existing.map(|deck| deck.theme_text_font.clone()))
-            .unwrap_or_else(|| DEFAULT_TEXT_FONT.into()),
-        code_font: update
-            .code_font
-            .or_else(|| existing.map(|deck| deck.theme_code_font.clone()))
-            .unwrap_or_else(|| DEFAULT_CODE_FONT.into()),
-        background: update.background.unwrap_or_else(|| {
-            existing
-                .map(|deck| deck.theme_background.clone())
-                .unwrap_or_else(|| DEFAULT_THEME_BACKGROUND.into())
-        }),
-        text: update.text.unwrap_or_else(|| {
-            existing
-                .map(|deck| deck.theme_text.clone())
-                .unwrap_or_else(|| DEFAULT_THEME_TEXT.into())
-        }),
-        accent: update.accent.unwrap_or_else(|| {
-            existing
-                .map(|deck| deck.theme_accent.clone())
-                .unwrap_or_else(|| DEFAULT_THEME_ACCENT.into())
-        }),
-    };
-    if !valid_headline_font(&theme.headline_font) {
-        return Err(ApiError::validation(format!(
-            "Theme headline_font must be one of: {}.",
-            HEADLINE_FONT_IDS.join(", ")
-        )));
-    }
-    if !valid_text_font(&theme.text_font) {
-        return Err(ApiError::validation(format!(
-            "Theme text_font must be one of: {}.",
-            TEXT_FONT_IDS.join(", ")
-        )));
-    }
-    if !valid_code_font(&theme.code_font) {
-        return Err(ApiError::validation(format!(
-            "Theme code_font must be one of: {}.",
-            CODE_FONT_IDS.join(", ")
-        )));
-    }
-    if [&theme.background, &theme.text, &theme.accent]
-        .into_iter()
-        .any(|color| !valid_color(color))
-    {
-        return Err(ApiError::validation(
-            "Theme colors must use #RRGGBB format.",
-        ));
-    }
-    Ok(theme)
-}
-
-fn legacy_font_pair(font: &str) -> Result<(&'static str, &'static str), ApiError> {
-    match font {
-        "system" => Ok(("inter", "inter")),
-        "serif" => Ok(("georgia", "georgia")),
-        "mono" => Ok(("system-mono", "system-mono")),
-        _ => Err(ApiError::validation(
-            "Legacy theme font must be system, serif, or mono. Use headline_font, text_font, and code_font for new themes.",
-        )),
-    }
-}
-
-fn valid_color(color: &str) -> bool {
-    color.len() == 7
-        && color.starts_with('#')
-        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-#[derive(Debug)]
-struct EmbedBundleStats {
-    files: usize,
-    bytes: u64,
-}
-
-#[derive(Debug)]
-enum EmbedInstallError {
-    Invalid(String),
-    Internal(anyhow::Error),
-}
-
-fn normalized_bundle_name(bundle: &str) -> Result<String, ApiError> {
-    let bundle = bundle.trim();
-    let valid = !bundle.is_empty()
-        && bundle.len() <= 64
-        && bundle.bytes().enumerate().all(|(index, byte)| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
-        });
-    if !valid {
-        return Err(ApiError::validation(
-            "Embed bundle names must use 1-64 lowercase letters, numbers, or hyphens, and must start with a letter or number.",
-        ));
-    }
-    Ok(bundle.into())
-}
-
-fn install_embed_bundle(
-    embed_root: &FilePath,
-    bundle: &str,
-    bytes: &[u8],
-) -> Result<EmbedBundleStats, EmbedInstallError> {
-    fs::create_dir_all(embed_root).map_err(embed_internal)?;
-    let upload_id = rand::random::<u64>();
-    let temporary = embed_root.join(format!(".{bundle}-{upload_id:016x}.upload"));
-    let backup = embed_root.join(format!(".{bundle}-{upload_id:016x}.backup"));
-    let destination = embed_root.join(bundle);
-    fs::create_dir(&temporary).map_err(embed_internal)?;
-
-    let extraction = extract_embed_archive(bytes, &temporary);
-    let stats = match extraction {
-        Ok(stats) => stats,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&temporary);
-            return Err(error);
-        }
-    };
-
-    if destination.exists() {
-        fs::rename(&destination, &backup).map_err(|error| {
-            let _ = fs::remove_dir_all(&temporary);
-            embed_internal(error)
-        })?;
-    }
-    if let Err(error) = fs::rename(&temporary, &destination) {
-        let restore_result = backup
-            .exists()
-            .then(|| fs::rename(&backup, &destination))
-            .transpose();
-        let _ = fs::remove_dir_all(&temporary);
-        return match restore_result {
-            Ok(_) => Err(embed_internal(error)),
-            Err(restore_error) => Err(embed_internal(anyhow!(
-                "could not activate embed bundle: {error}; restoring the previous bundle also failed: {restore_error}"
-            ))),
-        };
-    }
-    if backup.exists()
-        && let Err(error) = fs::remove_dir_all(&backup)
-    {
-        tracing::warn!(?error, path = %backup.display(), "could not remove replaced embed bundle");
-    }
-    Ok(stats)
-}
-
-fn extract_embed_archive(
-    bytes: &[u8],
-    destination: &FilePath,
-) -> Result<EmbedBundleStats, EmbedInstallError> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|_| {
-        EmbedInstallError::Invalid("The request body is not a valid ZIP archive.".into())
-    })?;
-    if archive.len() > MAX_EMBED_BUNDLE_FILES {
-        return Err(EmbedInstallError::Invalid(format!(
-            "Embed ZIPs cannot contain more than {MAX_EMBED_BUNDLE_FILES} entries."
-        )));
-    }
-    let mut stats = EmbedBundleStats { files: 0, bytes: 0 };
-    let mut contains_html = false;
-
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|_| {
-            EmbedInstallError::Invalid("The embed ZIP contains an unreadable entry.".into())
-        })?;
-        let path = safe_embed_entry_path(entry.name())?;
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
-        {
-            return Err(EmbedInstallError::Invalid(
-                "Embed ZIPs cannot contain symbolic links.".into(),
-            ));
-        }
-
-        let output_path = destination.join(&path);
-        if entry.is_dir() {
-            fs::create_dir_all(&output_path).map_err(embed_internal)?;
-            continue;
-        }
-
-        stats.files += 1;
-        let is_html = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
-            });
-        contains_html |= is_html;
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).map_err(embed_internal)?;
-        }
-        let mut output = fs::File::create(&output_path).map_err(embed_internal)?;
-        let remaining = MAX_EMBED_BUNDLE_BYTES.saturating_sub(stats.bytes);
-        let copied = std::io::copy(&mut entry.by_ref().take(remaining + 1), &mut output)
-            .map_err(embed_internal)?;
-        if copied > remaining {
-            return Err(EmbedInstallError::Invalid(
-                "Uncompressed embed bundles cannot exceed 100 MiB.".into(),
-            ));
-        }
-        if is_html && copied > MAX_EMBED_HTML_BYTES {
-            return Err(EmbedInstallError::Invalid(
-                "Individual embed HTML files cannot exceed 4 MiB.".into(),
-            ));
-        }
-        stats.bytes += copied;
-    }
-
-    if stats.files == 0 {
-        return Err(EmbedInstallError::Invalid(
-            "The embed ZIP must contain at least one file.".into(),
-        ));
-    }
-    if !contains_html {
-        return Err(EmbedInstallError::Invalid(
-            "The embed ZIP must contain an HTML file.".into(),
-        ));
-    }
-    Ok(stats)
-}
-
-fn safe_embed_entry_path(name: &str) -> Result<PathBuf, EmbedInstallError> {
-    if name.is_empty()
-        || name.contains(['\\', ':'])
-        || name.chars().any(char::is_control)
-        || name.len() > 1024
-    {
-        return Err(EmbedInstallError::Invalid(
-            "The embed ZIP contains an unsafe filename.".into(),
-        ));
-    }
-    let path = FilePath::new(name);
-    if path
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(EmbedInstallError::Invalid(
-            "The embed ZIP contains an unsafe path.".into(),
-        ));
-    }
-    Ok(path.to_owned())
-}
-
-fn embed_internal(error: impl Into<anyhow::Error>) -> EmbedInstallError {
-    EmbedInstallError::Internal(error.into())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::Arc};
+    use std::{
+        io::{Cursor, Write},
+        sync::Arc,
+    };
 
     use axum::{
         body::{Body, to_bytes},
         http::Request,
     };
-    use serde_json::{Value, json};
+    use serde_json::Value;
     use sqlx::SqlitePool;
     use tower::ServiceExt;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-    use crate::live::LiveHub;
+    use crate::{live::LiveHub, models::Theme};
 
     use super::*;
 
@@ -851,18 +459,26 @@ mod tests {
             secure_cookies: false,
             embed_dir: directory.path().join("embeds"),
         };
-        (directory, pool, router().with_state(state))
+        (directory, pool, super::super::router(state))
     }
 
-    fn request(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
-        let mut builder = Request::builder().method(method).uri(uri);
-        builder = builder.header(header::AUTHORIZATION, "Bearer slides_test_token");
-        if body.is_some() {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-        }
-        builder
-            .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
+    fn request(method: &str, path: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(format!("/api/v1{path}"))
+            .header(header::AUTHORIZATION, "Bearer slides_test_token")
+            .body(Body::empty())
             .unwrap()
+    }
+
+    fn upload(slug: &str, bytes: Vec<u8>) -> Request<Body> {
+        let mut request = request("POST", &format!("/presentations/{slug}/bundle"));
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/zip"),
+        );
+        *request.body_mut() = Body::from(bytes);
+        request
     }
 
     async fn json_body(response: Response) -> Value {
@@ -870,242 +486,553 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
-    fn embed_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    fn bundle_zip(source: &str, html: &str) -> Vec<u8> {
+        bundle_zip_files(&[
+            ("slides.md", source.as_bytes()),
+            ("demo.html", html.as_bytes()),
+        ])
+    }
+
+    fn bundle_zip_files(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        for (path, contents) in entries {
+        for (path, contents) in files {
             writer.start_file(*path, options).unwrap();
             writer.write_all(contents).unwrap();
         }
         writer.finish().unwrap().into_inner()
     }
 
+    fn admin_form(slug: &str, action: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/admin/decks/{slug}/{action}"))
+            .header(header::COOKIE, format!("slides_admin={}", hash("cookie")))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body.to_owned()))
+            .unwrap()
+    }
+
+    fn generations(directory: &FilePath) -> Vec<std::path::PathBuf> {
+        let mut paths: Vec<_> = fs::read_dir(directory.join("embeds"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    fn assert_no_temporary_directories(directory: &FilePath) {
+        assert!(fs::read_dir(directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".upload")
+        }));
+    }
+
     #[tokio::test]
-    async fn uploads_an_iframe_bundle() {
-        let (directory, _pool, app) = test_app().await;
-        let bundle = embed_zip(&[
-            (
-                "index.html",
-                b"<!doctype html><script src=\"app.js\"></script>",
-            ),
-            ("app.js", b"document.body.textContent = 'Ready';"),
-        ]);
+    async fn authenticates_before_reading_upload_body() {
+        let (_directory, _pool, app) = test_app().await;
+        for token in [None, Some("Bearer wrong"), Some("Basic slides_test_token")] {
+            let mut req = upload("demo", vec![0; MAX_BUNDLE_UPLOAD_BYTES + 1]);
+            req.headers_mut().remove(header::AUTHORIZATION);
+            if let Some(token) = token {
+                req.headers_mut()
+                    .insert(header::AUTHORIZATION, HeaderValue::from_static(token));
+            }
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+        }
+        for (method, path) in [
+            ("GET", "/presentations"),
+            ("GET", "/presentations/demo"),
+            ("DELETE", "/presentations/demo"),
+        ] {
+            let mut req = request(method, path);
+            req.headers_mut().remove(header::AUTHORIZATION);
+            assert_eq!(
+                app.clone().oneshot(req).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn creates_replaces_reads_lists_and_deletes_bundles() {
+        let (directory, pool, app) = test_app().await;
+        let source = "# First\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n";
         let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/embeds/demo")
-                    .header(header::AUTHORIZATION, "Bearer slides_test_token")
-                    .header(header::CONTENT_TYPE, "application/zip")
-                    .body(Body::from(bundle))
-                    .unwrap(),
-            )
+            .clone()
+            .oneshot(upload("demo", bundle_zip(source, "first")))
             .await
             .unwrap();
-
         assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "/api/v1/presentations/demo"
+        );
+        assert_eq!(
+            json_body(response).await,
+            json!({
+                "slug": "demo", "title": "First", "files": 2, "bytes": source.len() + 5,
+            })
+        );
+        let old_generation = generations(directory.path()).pop().unwrap();
+        let generation = old_generation.file_name().unwrap().to_str().unwrap();
+        assert!(generation.starts_with("bundle-"));
+        assert_eq!(generation.len(), 39);
+        assert!(generation[7..].bytes().all(|b| b.is_ascii_hexdigit()));
+        let deck = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert!(
+            deck.draft_source
+                .contains(&format!("/assets/embeds/{generation}/demo.html"))
+        );
+
+        let response = app
+            .clone()
+            .oneshot(upload("demo", bundle_zip("# Second", "second")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "/api/v1/presentations/demo"
+        );
+        assert_eq!(json_body(response).await["title"], "Second");
+        assert_eq!(generations(directory.path()).len(), 2);
+        assert_eq!(
+            fs::read_to_string(old_generation.join("demo.html")).unwrap(),
+            "first"
+        );
+        assert_no_temporary_directories(directory.path());
+
+        let response = app
+            .clone()
+            .oneshot(request("GET", "/presentations/demo"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         let body = json_body(response).await;
-        assert_eq!(body["url_prefix"], "/assets/embeds/demo/");
+        assert_eq!(body["title"], "Second");
+        assert_eq!(body["source"], "# Second");
         assert_eq!(
-            fs::read_to_string(directory.path().join("embeds/demo/index.html")).unwrap(),
-            "<!doctype html><script src=\"app.js\"></script>"
+            body["theme"],
+            serde_json::to_value(PresentationTheme::from(&deck)).unwrap()
         );
-    }
-
-    #[test]
-    fn rejects_unsafe_embed_paths() {
-        assert!(safe_embed_entry_path("../secret.html").is_err());
-        assert!(safe_embed_entry_path("folder\\secret.html").is_err());
-        assert!(safe_embed_entry_path("/absolute.html").is_err());
-    }
-
-    #[tokio::test]
-    async fn requires_a_bearer_token() {
-        let (_directory, _pool, app) = test_app().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/presentations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            response.headers().get(header::WWW_AUTHENTICATE).unwrap(),
-            "Bearer"
-        );
-        assert_eq!(json_body(response).await["error"]["code"], "unauthorized");
-    }
-
-    #[tokio::test]
-    async fn creates_reads_updates_lists_and_deletes_presentations() {
-        let (_directory, _pool, app) = test_app().await;
         let response = app
             .clone()
-            .oneshot(request(
-                "POST",
-                "/presentations",
-                Some(json!({
-                    "title": "API deck",
-                    "slug": "api-deck",
-                    "source": "# Created through the API",
-                    "theme": { "font": "mono", "accent": "#89b4fa" }
-                })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        assert_eq!(
-            response.headers().get(header::LOCATION).unwrap(),
-            "/api/v1/presentations/api-deck"
-        );
-        let created = json_body(response).await;
-        assert_eq!(created["slug"], "api-deck");
-        assert_eq!(created["theme"]["font"], "mono");
-        assert_eq!(created["theme"]["headline_font"], "system-mono");
-        assert_eq!(created["theme"]["text_font"], "system-mono");
-        assert_eq!(created["theme"]["code_font"], DEFAULT_CODE_FONT);
-        assert_eq!(created["theme"]["background"], DEFAULT_THEME_BACKGROUND);
-
-        let response = app
-            .clone()
-            .oneshot(request("GET", "/presentations", None))
+            .oneshot(request("GET", "/presentations"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             json_body(response).await["presentations"][0]["slug"],
-            "api-deck"
+            "demo"
         );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("DELETE", "/presentations/demo"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            app.oneshot(request("GET", "/presentations/demo"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 
+    #[tokio::test]
+    async fn replacing_bundle_preserves_published_source_and_generation_assets() {
+        let (directory, pool, app) = test_app().await;
+        let source_a =
+            "# A\n\n![Image](image.svg)\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n";
+        let image_a = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><text>A</text></svg>";
+        let html_a = b"<!doctype html><html><body>A</body></html>";
+        let files_a: &[(&str, &[u8])] = &[
+            ("slides.md", source_a.as_bytes()),
+            ("image.svg", image_a),
+            ("demo.html", html_a),
+        ];
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip_files(files_a)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let deck_a = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        let generation_a = generations(directory.path()).pop().unwrap();
+        let name_a = generation_a.file_name().unwrap().to_str().unwrap();
+        for asset in ["image.svg", "demo.html"] {
+            assert!(
+                deck_a
+                    .draft_source
+                    .contains(&format!("/assets/embeds/{name_a}/{asset}"))
+            );
+        }
+        let version_a = store::publish_bundle_deck(&pool, deck_a.id).await.unwrap();
+
+        let source_b = source_a.replacen("# A", "# B", 1);
+        let image_b = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><text>B</text></svg>";
+        let html_b = b"<!doctype html><html><body>B</body></html>";
+        assert_eq!(
+            app.clone()
+                .oneshot(upload(
+                    "demo",
+                    bundle_zip_files(&[
+                        ("slides.md", source_b.as_bytes()),
+                        ("image.svg", image_b),
+                        ("demo.html", html_b),
+                    ])
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let deck_b = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(deck_b.id, deck_a.id);
+        assert_eq!(deck_b.title, "B");
+        let paths = generations(directory.path());
+        assert_eq!(paths.len(), 2);
+        let generation_b = paths.iter().find(|path| **path != generation_a).unwrap();
+        let name_b = generation_b.file_name().unwrap().to_str().unwrap();
+        for asset in ["image.svg", "demo.html"] {
+            assert!(
+                deck_b
+                    .draft_source
+                    .contains(&format!("/assets/embeds/{name_b}/{asset}"))
+            );
+        }
+        assert!(!deck_b.draft_source.contains(name_a));
+        let published_a = store::get_version(&pool, version_a).await.unwrap();
+        assert_eq!(published_a.title, "A");
+        assert_eq!(published_a.source, deck_a.draft_source);
+        assert!(!published_a.source.contains(name_b));
+        for (path, contents) in files_a {
+            assert_eq!(fs::read(generation_a.join(path)).unwrap(), *contents);
+        }
+        assert_eq!(fs::read(generation_b.join("image.svg")).unwrap(), image_b);
+        assert_eq!(fs::read(generation_b.join("demo.html")).unwrap(), html_b);
         let response = app
-            .clone()
-            .oneshot(request(
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/assets/embeds/{name_a}/image.svg"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .as_ref(),
+            image_a
+        );
+        assert_no_temporary_directories(directory.path());
+    }
+
+    #[tokio::test]
+    async fn bundle_browser_publish_ignores_forms_and_save_rejects_changes() {
+        let (directory, pool, app) = test_app().await;
+        assert_eq!(
+            app.clone()
+                .oneshot(upload(
+                    "demo",
+                    bundle_zip(
+                        "# Persisted\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n",
+                        "original"
+                    )
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let before = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        let paths = generations(directory.path());
+        let tampered = "title=Tampered&source=%23+Tampered&headline_font=serif&text_font=serif&code_font=monospace&background=%23000000&text=%23ffffff&accent=%23ff0000";
+        for (index, body) in ["", tampered].into_iter().enumerate() {
+            let response = app
+                .clone()
+                .oneshot(admin_form("demo", "publish", body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(
+                response.headers()[header::LOCATION],
+                "/admin/decks/demo/edit"
+            );
+            let versions: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM deck_versions WHERE deck_id = ? ORDER BY version_number",
+            )
+            .bind(before.id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert_eq!(versions.len(), index + 1);
+            for version_id in versions {
+                let version = store::get_version(&pool, version_id).await.unwrap();
+                assert_eq!(version.title, before.title);
+                assert_eq!(version.source, before.draft_source);
+                assert_eq!(version.theme_headline_font, before.theme_headline_font);
+                assert_eq!(version.theme_text_font, before.theme_text_font);
+                assert_eq!(version.theme_code_font, before.theme_code_font);
+                assert_eq!(version.theme_background, before.theme_background);
+                assert_eq!(version.theme_text, before.theme_text);
+                assert_eq!(version.theme_accent, before.theme_accent);
+            }
+            let response = app
+                .clone()
+                .oneshot(admin_form("demo", "save", body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(
+                String::from_utf8(body.to_vec())
+                    .unwrap()
+                    .contains("Bundle decks are read-only")
+            );
+            let after = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(Presentation::from(&after)).unwrap(),
+                serde_json::to_value(Presentation::from(&before)).unwrap()
+            );
+            assert!(store::is_bundle_deck(&pool, after.id).await.unwrap());
+            assert_eq!(generations(directory.path()), paths);
+            assert_eq!(
+                fs::read_to_string(paths[0].join("demo.html")).unwrap(),
+                "original"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn converting_legacy_deck_to_bundle_preserves_published_version() {
+        let (_directory, pool, app) = test_app().await;
+        let theme = Theme::default();
+        let legacy_source = "# Legacy draft";
+        let published_source = "# Legacy published\n\nSnapshot before conversion.";
+        let legacy =
+            store::create_deck_with_content(&pool, "demo", "Legacy", legacy_source, &theme)
+                .await
+                .unwrap();
+        let version_id = store::save_and_publish_deck(
+            &pool,
+            legacy.id,
+            "Legacy",
+            legacy_source,
+            published_source,
+            &theme,
+        )
+        .await
+        .unwrap();
+        assert!(!store::is_bundle_deck(&pool, legacy.id).await.unwrap());
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip("# Bundle", "bundle")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let converted = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(converted.id, legacy.id);
+        assert_eq!(converted.title, "Bundle");
+        assert_eq!(converted.draft_source, "# Bundle");
+        assert!(store::is_bundle_deck(&pool, converted.id).await.unwrap());
+        assert_eq!(
+            app.oneshot(admin_form("demo", "publish", ""))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SEE_OTHER
+        );
+        let versions: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM deck_versions WHERE deck_id = ? ORDER BY version_number",
+        )
+        .bind(legacy.id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0], version_id);
+        let old = store::get_version(&pool, version_id).await.unwrap();
+        assert_eq!(old.title, "Legacy");
+        assert_eq!(old.source, published_source);
+        assert_eq!(old.theme_background, theme.background);
+        let new = store::get_version(&pool, versions[1]).await.unwrap();
+        assert_eq!(new.title, "Bundle");
+        assert_eq!(new.source, converted.draft_source);
+    }
+
+    #[tokio::test]
+    async fn failed_replacements_preserve_draft_and_assets() {
+        let (directory, pool, app) = test_app().await;
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip("# Original", "original")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let before = generations(directory.path());
+        // Missing iframe target fails after files have been extracted.
+        for bytes in [
+            b"not a ZIP".to_vec(),
+            bundle_zip(
+                "# Invalid\n\n:::iframe\nsrc=\"missing.html\"\ntitle=\"Missing\"\n:::\n",
+                "bad",
+            ),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(upload("demo", bytes))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            assert_eq!(generations(directory.path()), before);
+            assert_no_temporary_directories(directory.path());
+        }
+        sqlx::query("CREATE TRIGGER reject_bundle_update BEFORE UPDATE ON decks BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+            .execute(&pool).await.unwrap();
+        assert_eq!(
+            app.oneshot(upload("demo", bundle_zip("# Replacement", "replacement")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let deck = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(deck.title, "Original");
+        assert_eq!(deck.draft_source, "# Original");
+        assert_eq!(generations(directory.path()), before);
+        assert_eq!(
+            fs::read_to_string(before[0].join("demo.html")).unwrap(),
+            "original"
+        );
+        assert_no_temporary_directories(directory.path());
+    }
+
+    #[tokio::test]
+    async fn rejects_content_types_sizes_and_reserved_slugs() {
+        let (directory, _pool, app) = test_app().await;
+        for content_type in [
+            None,
+            Some("application/json"),
+            Some("application/x-zip-compressed"),
+        ] {
+            let mut req = upload("demo", Vec::new());
+            req.headers_mut().remove(header::CONTENT_TYPE);
+            if let Some(value) = content_type {
+                req.headers_mut()
+                    .insert(header::CONTENT_TYPE, HeaderValue::from_static(value));
+            }
+            assert_eq!(
+                app.clone().oneshot(req).await.unwrap().status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            );
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", vec![0; MAX_BUNDLE_UPLOAD_BYTES + 1]))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        let oversized_html = "x".repeat(4 * 1024 * 1024 + 1);
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip("# Too large", &oversized_html)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert!(generations(directory.path()).is_empty());
+        for slug in ["shared", "SHARED", "admin", "bad_slug", "-bad"] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(upload(slug, bundle_zip("# Valid", "ok")))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+        assert_eq!(
+            app.oneshot(upload("demo", Vec::new()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_no_temporary_directories(directory.path());
+    }
+
+    #[tokio::test]
+    async fn old_mutation_endpoints_are_removed() {
+        let (_directory, _pool, app) = test_app().await;
+        for (method, path, expected) in [
+            ("POST", "/presentations", StatusCode::METHOD_NOT_ALLOWED),
+            (
                 "PATCH",
-                "/presentations/api-deck",
-                Some(json!({
-                    "title": "Updated API deck",
-                    "source": "# Updated\n\n```mermaid\nflowchart TD\n    A --> B\n```",
-                    "theme": {
-                        "headline_font": "bebas-neue",
-                        "text_font": "inter",
-                        "code_font": "system-mono"
-                    }
-                })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let updated = json_body(response).await;
-        assert_eq!(updated["title"], "Updated API deck");
-        assert!(updated["source"].as_str().unwrap().contains("mermaid"));
-        assert_eq!(updated["theme"]["font"], "system");
-        assert_eq!(updated["theme"]["headline_font"], "bebas-neue");
-        assert_eq!(updated["theme"]["text_font"], "inter");
-        assert_eq!(updated["theme"]["code_font"], "system-mono");
-
-        let response = app
-            .clone()
-            .oneshot(request(
-                "PATCH",
-                "/presentations/api-deck",
-                Some(json!({ "theme": updated["theme"].clone() })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let response = app
-            .clone()
-            .oneshot(request("GET", "/presentations/api-deck", None))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(json_body(response).await["title"], "Updated API deck");
-
-        let response = app
-            .oneshot(request("DELETE", "/presentations/api-deck", None))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                "/presentations/demo",
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            ("PUT", "/embeds/demo", StatusCode::NOT_FOUND),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(request(method, path))
+                    .await
+                    .unwrap()
+                    .status(),
+                expected
+            );
+        }
     }
 
     #[tokio::test]
     async fn rejects_deleting_a_presentation_with_an_active_session() {
         let (_directory, pool, app) = test_app().await;
-        let response = app
-            .clone()
-            .oneshot(request(
-                "POST",
-                "/presentations",
-                Some(json!({
-                    "title": "Live API deck",
-                    "slug": "live-api-deck",
-                    "source": "# Live",
-                })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("live-api-deck", bundle_zip("# Live", "live")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
         let deck = store::deck_by_slug(&pool, "live-api-deck")
             .await
             .unwrap()
             .unwrap();
-        let version_id = store::save_and_publish_deck(
-            &pool,
-            deck.id,
-            &deck.title,
-            &deck.draft_source,
-            &deck.draft_source,
-            &Theme::from(&deck),
-        )
-        .await
-        .unwrap();
+        let version_id = store::publish_bundle_deck(&pool, deck.id).await.unwrap();
         store::start_session(&pool, deck.id, version_id)
             .await
             .unwrap();
-
         let response = app
-            .oneshot(request("DELETE", "/presentations/live-api-deck", None))
+            .oneshot(request("DELETE", "/presentations/live-api-deck"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(json_body(response).await["error"]["code"], "conflict");
-    }
-
-    #[tokio::test]
-    async fn rejects_invalid_markdown_and_unknown_fields() {
-        let (_directory, _pool, app) = test_app().await;
-        let response = app
-            .clone()
-            .oneshot(request(
-                "POST",
-                "/presentations",
-                Some(json!({
-                    "title": "Broken",
-                    "source": "---",
-                })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-        let response = app
-            .oneshot(request(
-                "POST",
-                "/presentations",
-                Some(json!({
-                    "title": "Unknown field",
-                    "source": "# Valid",
-                    "publish": true,
-                })),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(json_body(response).await["error"]["code"], "invalid_json");
     }
 }

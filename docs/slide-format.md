@@ -17,6 +17,33 @@ Slides Markdown should be:
 
 The format intentionally does not derive navigation from heading levels, execute raw HTML from Markdown, or use list markers and image alt text as hidden presentation commands. Trusted local HTML bundles are available only through the restricted iframe directive described below.
 
+## Presentation bundles
+
+Create or replace a draft with `POST /api/v1/presentations/{slug}/bundle`, `Authorization: Bearer <token>`, and a raw `application/zip` body. Creation returns `201 Created`; replacement returns `200 OK`. No JSON or multipart wrapper is accepted. The slug comes from the URL, not the title. There is no manifest or separate metadata file.
+
+The archive must contain the exact root filename `slides.md`, encoded as UTF-8. The first H1's text (including inline code text, with formatting removed) supplies the title. It must be nonempty; keep it at most 120 characters. Do not wrap the files in a parent directory:
+
+```text
+slides.md
+code/example.rs
+images/diagram.svg
+demo/index.html
+demo/app.js
+demo/style.css
+```
+
+From the directory containing these files, create a fresh archive with `python3 -m zipfile -c presentation.zip slides.md code images demo` (standard-library Python), or `zip -r presentation.zip slides.md code images demo` if `zip` is installed. Omit directories that do not exist. For a Markdown-only deck, include just `slides.md`. See the [README upload example](../README.md#presentation-api) for curl authentication and upload.
+
+### Archive validation
+
+- Maximum ZIP body: **20 MiB**; maximum actual extracted bytes: **100 MiB**.
+- Maximum **512 entries**, including directory entries; `slides.md` is limited to **2 MiB**, each `.html` or `.htm` file to **4 MiB**. Resolved Markdown is limited to **100 MiB**.
+- Only Stored and Deflated ZIP entries are supported. Encrypted archives, symlinks, special files, duplicate paths (ASCII case-insensitive), file/directory collisions, and corrupt entries are rejected.
+- Path segments use only ASCII letters, digits, `.`, `-`, and `_`. Empty segments, `.` or `..` segments, trailing dots, absolute paths, backslashes, spaces, percent-encoded paths, and non-ASCII names are rejected.
+- Allowed file extensions (case-insensitive): `rs`, `c`, `h`, `cpp`, `hpp`, `py`, `go`, `java`, `ts`, `tsx`, `jsx`, `sh`, `toml`, `json`, `yaml`, `yml`, `txt`, `css`, `js`, `mjs`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `ico`, `avif`, `woff`, `woff2`, `ttf`, `otf`, `md`, `html`, `htm`.
+
+Upload validation resolves code includes and local Markdown/iframe references, then validates Slides Markdown. Original files remain in a new immutable generation; the draft stores resolved Markdown. Replacing a draft never changes published versions or their assets. Bundle decks are read-only in the browser, with preview, publish, present, and print actions. Upload a complete replacement ZIP to revise them. Existing legacy decks retain browser editing as a migration bridge; their path behavior is called out below.
+
 ## Document model
 
 A deck is UTF-8 Markdown containing one or more slides. Each slide contains:
@@ -63,16 +90,16 @@ The first token after a fenced-code marker is used as the syntax name. Unknown s
 
 ### Referenced code files
 
-Executable examples can live beside the presentations under `examples/code/` and be referenced as the second token of an otherwise empty code fence:
+Executable examples live under `code/` in the ZIP and are referenced as the second token of an otherwise empty code fence:
 
 ````markdown
 ```python code/word-count/python/step_01.py
 ```
 ````
 
-The first token selects syntax highlighting. The second is a path relative to `examples/` and must remain inside `code/`; absolute paths, parent-directory traversal, symlink escapes, missing files, non-UTF-8 files, extra fence arguments, and fences that also contain inline code are rejected.
+The first token selects syntax highlighting. The second is a path relative to the ZIP root and must start with `code/`. Uploading includes the **whole UTF-8 file** as ordinary inline code; there are no line ranges, snippet selectors, or extra fence arguments. Missing files, unsafe paths, non-UTF-8 content, and fences that also contain inline code are rejected. If the referenced file contains a line that would close the fence, use a longer fence or the other fence marker.
 
-Draft previews read the current file. Publishing expands references into ordinary inline code fences in the immutable version, so later file edits do not change an already published presentation.
+For existing legacy decks and repository CLI validation only, paths resolve relative to `examples/`, under `examples/code/`. Legacy draft previews read the current file; publication snapshots its contents. Bundle previews instead use the code resolved at upload time.
 
 ### Mermaid diagrams
 
@@ -93,14 +120,16 @@ Mermaid blocks may coexist with an interaction, iframe, or notes block and do no
 
 ### Local HTML embeds
 
-Trusted HTML pages stored below `assets/embeds/<bundle>/` can be placed on a slide with an iframe block:
+Trusted HTML pages included in the presentation ZIP can be placed on a slide with an iframe block. Use a path relative to the ZIP root:
 
 ```markdown
-:::iframe src="/assets/embeds/demo/index.html" title="Interactive ownership demo"
+:::iframe src="demo/index.html" title="Interactive ownership demo"
 :::
 ```
 
-Both attributes are required. `src` must be an `/assets/embeds/` URL with a bundle directory and an `.html` or `.htm` file; external URLs, encoded paths, backslashes, colons, empty segments, and `.` or `..` traversal are rejected. The block body must be empty. `title` must be meaningful for assistive technology and may contain at most 200 characters.
+Both attributes are required. `src` must reference an existing `.html` or `.htm` file in the ZIP. The block body must be empty. `title` must be meaningful for assistive technology and may contain at most 200 characters. The server rewrites the relative path to `/assets/embeds/<generation>/demo/index.html`; do not author that generated URL yourself.
+
+Existing legacy decks still use `/assets/embeds/<bundle>/index.html` references to server-local assets. Those absolute paths are not accepted as references in a new presentation ZIP.
 
 Slides renders the page in a sandbox that allows scripts but does not grant same-origin access, forms, popups, downloads, top-level navigation, workers, or nested frames. Its content policy blocks cross-origin subresources and APIs such as `fetch`, WebSocket, and EventSource. An embed can still navigate its own frame to another page, so iframe bundles must be trusted local content. Embed HTML is also served with a response-level sandbox, including when opened directly, and archived copies receive an equivalent embedded content policy. Keep scripts, styles, images, fonts, and other dependencies in the same bundle and use relative URLs.
 
@@ -108,15 +137,21 @@ Downloaded session archives include the complete bundle, up to 512 files and 100
 
 Iframe blocks may appear alongside Markdown, interactions, Mermaid diagrams, and presenter notes.
 
-Raw HTML is escaped and displayed as text. It is never executed. Link and image destinations may use:
+### Images and links
 
-- relative paths;
-- `/`-absolute paths;
-- fragment identifiers;
-- `http` and `https` URLs;
-- `mailto` URLs.
+Raw HTML in Markdown is escaped and displayed as text, never executed. In a presentation ZIP, images and local links must reference existing files relative to the ZIP root:
 
-Other schemes are replaced with `#`.
+```markdown
+![Architecture](images/diagram.svg)
+[Example source](code/example.rs)
+[Reference](https://www.rust-lang.org/)
+```
+
+Inline and reference-style Markdown images and links are resolved at upload time. One leading `./` is allowed. Local paths use the archive's safe filename rules; absolute paths and traversal are rejected. Query strings and fragments on local references are preserved, but cannot contain control characters, backslashes, `%`, `:`, quotes, angle brackets, or spaces. Iframe URLs must also satisfy the iframe parser's stricter rules; prefer a plain relative filename.
+
+Images and iframe sources cannot use remote URLs. Ordinary navigation links may still use `http://`, `https://`, `mailto:`, or a fragment identifier; these are not bundled resources. HTML may run sandboxed JavaScript, but scripts, styles, images, fonts, and other resources must be bundled, not loaded from CDNs or external services. HTML dependency URLs are left unchanged, not fetched or rewritten by the importer.
+
+For existing legacy decks, the Markdown renderer also accepts `/`-absolute paths and remote image URLs; unsupported schemes are replaced with `#`. This renderer behavior does not bypass bundle upload validation.
 
 ### Presenter notes
 

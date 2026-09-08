@@ -25,9 +25,9 @@
       <div>
         <p class="eyebrow">Workspace</p>
         <h1>Presentations</h1>
-        <p>Create a deck or continue where you left off.</p>
+        <p>Upload a presentation bundle through the API, then open it here to preview, publish, or present.</p>
       </div>
-      <button type="button" popovertarget="create-presentation"><span aria-hidden="true">＋</span> New presentation</button>
+      <a class="button" href="/admin/settings">API upload instructions</a>
     </header>
 
     {% if !decks.is_empty() %}
@@ -45,7 +45,7 @@
       {% for deck in decks %}
       <li class="presentation-card-item" data-deck-card data-search-text="{{ deck.title }} {{ deck.slug }}">
         <article class="presentation-card">
-          <a class="presentation-card-link" href="/admin/decks/{{ deck.slug }}/edit" aria-label="Edit {{ deck.title }}">
+          <a class="presentation-card-link" href="/admin/decks/{{ deck.slug }}/edit" aria-label="Open {{ deck.title }}">
             <span class="presentation-preview" aria-hidden="true">
               <span class="presentation-preview-kicker">Presentation</span>
               <strong>{{ deck.title }}</strong>
@@ -68,7 +68,7 @@
             </span>
           </a>
           <footer class="presentation-card-actions">
-            <a class="button secondary small" href="/admin/decks/{{ deck.slug }}/edit">Edit deck</a>
+            <a class="button secondary small" href="/admin/decks/{{ deck.slug }}/edit">Open deck</a>
             {% match deck.active_code %}
               {% when Some with (code) %}<a class="button small" href="/present/{{ code }}">Present</a>
               {% when None %}
@@ -94,9 +94,9 @@
     {% if decks.is_empty() %}
     <section class="empty-state dashboard-empty-state">
       <div>
-        <h2>Create your first presentation</h2>
-        <p>Write slides in Markdown, preview as you type, and start a live room when you are ready.</p>
-        <button type="button" popovertarget="create-presentation">New presentation</button>
+        <h2>Upload your first presentation</h2>
+        <p>Prepare a bundle with your slides and assets, then upload it through the API. Bundle decks are read-only here; upload a new bundle to make changes.</p>
+        <a class="button" href="/admin/settings">API upload instructions</a>
       </div>
     </section>
     {% endif %}
@@ -134,25 +134,6 @@
     {% endif %}
   </main>
 
-  <section id="create-presentation" class="create-popover" popover role="dialog" aria-labelledby="create-presentation-title">
-    <header>
-      <div>
-        <p class="eyebrow">New deck</p>
-        <h2 id="create-presentation-title">Create a presentation</h2>
-      </div>
-      <button class="popover-close ghost" type="button" popovertarget="create-presentation" popovertargetaction="hide" aria-label="Close">×</button>
-    </header>
-    <div id="create-error" role="alert"></div>
-    <form method="post" action="/admin/decks" hx-post="/admin/decks" hx-target="#create-error" hx-disable="find button">
-      <label>Title
-        <input name="title" placeholder="Rust without the guesswork" required maxlength="120" autofocus>
-      </label>
-      <label>Shortlink <span class="optional-label">Optional</span>
-        <input name="slug" placeholder="Generated from the title" pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?" maxlength="48">
-        <small>Lowercase letters, numbers, and hyphens.</small>
-      </label>
-      <button type="submit">Create presentation</button>
-    </form>
-  </section>
+
 </body>
 </html>

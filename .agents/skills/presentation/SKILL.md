@@ -1,11 +1,11 @@
 ---
 name: presentation
-description: Create or revise complete, paste-ready presentation decks for this Slides app. Use when the user asks for a presentation, talk, workshop, lesson, pitch, or slide deck. Produces valid Slides Markdown v1 with slide separators, optional presenter notes, and supported audience interactions.
+description: Create or revise complete, bundle-ready presentation decks for this Slides app. Use when the user asks for a presentation, talk, workshop, lesson, pitch, or slide deck. Produces valid Slides Markdown v1 with slide separators, optional presenter notes, and supported audience interactions.
 ---
 
 # Create a Slides presentation
 
-Create a coherent presentation in the Markdown format accepted by this repository. The final response must be ready to paste directly into the Slides editor.
+Create a coherent presentation in the Markdown format accepted by this repository. The final document must be ready to save as root `slides.md` in a presentation ZIP. Bundle decks are read-only in the browser; users can preview, publish, present, and print them. Existing legacy decks retain browser editing only as a migration bridge.
 
 ## Understand the request
 
@@ -30,12 +30,12 @@ The normative project reference is `docs/slide-format.md`. Consult it if any syn
 
 ### Document and slide boundaries
 
-- Output UTF-8 Markdown with one or more non-empty slides.
+- Output UTF-8 Markdown with one or more non-empty slides. Begin with a nonempty H1 title of at most 120 characters; the first H1 supplies the bundle's presentation title. There is no manifest.
 - Separate slides with a line whose trimmed content is exactly `---`.
 - Do not place `---` before the first slide or after the final slide.
 - Do not add YAML front matter. A leading `---` is interpreted as an empty slide separator, not metadata.
 - Use ordinary CommonMark. Tables, strikethrough, task lists, and fenced code blocks are supported.
-- Raw HTML is displayed as text and cannot be used for layout or behavior. Use the restricted local iframe directive only when the user provides a real bundle under `assets/embeds/`.
+- Raw HTML is displayed as text and cannot be used for layout or behavior. Use the restricted local iframe directive only with real, trusted HTML included in the presentation ZIP.
 - Unsupported presentation features such as columns, incremental reveals, backgrounds, custom classes, or per-slide metadata do not exist. Do not invent syntax for them.
 
 A basic deck has this shape:
@@ -127,14 +127,16 @@ Always close every interaction with a line containing exactly `:::`.
 
 ### Local HTML embeds
 
-Use a local iframe only when the user provides a trusted, self-contained HTML bundle under `assets/embeds/<bundle>/`. Both attributes are required, the body is empty, and dependencies must use relative URLs:
+Use a local iframe only with trusted, self-contained HTML included in the presentation ZIP. Both attributes are required, the body is empty, and the source is relative to the ZIP root:
 
 ```markdown
-:::iframe src="/assets/embeds/demo/index.html" title="Interactive demo"
+:::iframe src="demo/index.html" title="Interactive demo"
 :::
 ```
 
-Never use an external URL, traversal, raw `<iframe>` HTML, or files outside `assets/embeds/`. Write a concise, meaningful title for assistive technology. The embed is sandboxed and cannot use forms, popups, or parent-page access. Cross-origin resources and APIs such as `fetch` and WebSocket are blocked, but the page can navigate its own frame, so only use trusted local bundles.
+Never use an external iframe URL, absolute path, traversal, raw `<iframe>` HTML, or a missing file. Write a concise, meaningful title of at most 200 characters for assistive technology. HTML may run sandboxed JavaScript, but all scripts, styles, images, fonts, and other dependencies must be bundled and use relative URLs: no CDNs or external resources. Forms, popups, parent-page access, and network APIs such as `fetch` and WebSocket are blocked. A page can still navigate its own frame, so use only trusted content.
+
+Markdown images and local links also use existing paths relative to the ZIP root, such as `![Diagram](images/diagram.svg)` and `[Source](code/example.rs)`. External images are rejected, but ordinary navigation links may use HTTP(S), mailto, or fragments. The importer rewrites local references to immutable generation URLs; never fabricate those URLs. For an explicitly legacy deck only, retain existing `/assets/embeds/<bundle>/...` references rather than treating it as a new bundle.
 
 ### Mermaid diagrams
 
@@ -171,14 +173,14 @@ fn main() {
 
 Interactive views add a Run control to `rust` and `rs` blocks. Make runnable examples complete and safe when execution is part of the presentation.
 
-Only reference an external code file when the user provides a real path under `examples/code/`. The fence must otherwise be empty, the path is relative to `examples/`, and inline code cannot appear in the same fence:
+Only reference a real UTF-8 file included under `code/` in the ZIP. The fence must otherwise be empty, the path is relative to the ZIP root, and inline code cannot appear in the same fence:
 
 ````markdown
 ```python code/example/script.py
 ```
 ````
 
-Do not fabricate referenced paths.
+Includes expand the whole file at upload time; line ranges, snippet selectors, and extra fence arguments are unsupported. Do not fabricate referenced paths. Use a longer fence if the file contains a matching closing fence. Existing legacy decks and repository CLI validation resolve code paths under `examples/code/` instead.
 
 ## Check the result
 
@@ -192,7 +194,9 @@ Before responding, verify all of the following:
 - Word-cloud blocks have no body.
 - Every Mermaid block starts with a supported diagram type, uses concise labels, and includes accessibility text.
 - Interaction names and attributes exactly match the supported syntax.
-- The first slide begins with content, not metadata or a separator.
+- The first slide begins with a nonempty H1 title of at most 120 characters, not metadata or a separator.
+- All referenced local files exist in the ZIP; `slides.md` is at its root, without a wrapper parent.
+- Paths and file extensions satisfy the bundle rules in `docs/slide-format.md`; HTML dependencies are bundled, not remote.
 - The deck ends with slide content, not a trailing separator.
 
 ## Uploading to a Slides server
@@ -200,12 +204,14 @@ Before responding, verify all of the following:
 Only upload when the user explicitly asks you to upload, publish, or save the deck. Creating or revising a deck alone does not permit a network request.
 
 - Prefer the conventional `SLIDES_URL` and `SLIDES_API_TOKEN` environment variables, or values supplied in the conversation. If the server URL is unavailable, ask for it. If no token exists, direct the user to `<server-url>/admin/settings`; its plaintext value is shown only once.
-- Treat the token as a secret. Send it only as `Authorization: Bearer <token>` and never echo it in responses, command output, URLs, source, or logs. Send JSON requests with `Content-Type: application/json`.
-- The presentation API manages drafts only. Publishing an immutable version and starting a live session remain actions in the presenter UI.
-- Find an existing draft with `GET /api/v1/presentations` or, for a known slug, `GET /api/v1/presentations/{slug}`. Create one with `POST /api/v1/presentations`; update it with `PATCH /api/v1/presentations/{slug}`. Slugs are immutable.
-- Send the complete Slides Markdown document in `source`. Include `title`, and optionally `slug` and `theme`, on create. Never send a partial Markdown fragment as `source`. Presentation JSON requests are limited to 2 MiB.
-- Use the slug returned in the response or `Location` header; never infer the final slug from the title. `<server-url>/<slug>` is the named shortlink and waiting page, not proof that the draft has been published.
-- Presentation create/update requests upload Markdown and metadata, not referenced images or code files. Upload each local iframe bundle separately as a ZIP with `PUT /api/v1/embeds/{bundle}` and `Content-Type: application/zip`; ZIP contents are served below `/assets/embeds/{bundle}/`. ZIP requests are limited to 20 MiB compressed and 100 MiB after extraction; individual HTML files are limited to 4 MiB. Bundle names are global, and replacing a bundle takes effect immediately, so do not replace one during a live session.
+- Treat the token as a secret. Send it only as `Authorization: Bearer <token>` and never echo it in responses, command output, URLs, source, or logs.
+- Find an existing draft with `GET /api/v1/presentations` or `GET /api/v1/presentations/{slug}`. Choose the target slug explicitly; do not replace a different deck without authorization.
+- Create or replace with `POST /api/v1/presentations/{slug}/bundle`, sending a raw ZIP body and `Content-Type: application/zip`, not JSON or multipart. Expect `201 Created` for creation and `200 OK` for replacement. There are no separate title, source, or theme request fields.
+- Include the complete UTF-8 document as root `slides.md` and every dependency in the same ZIP, without a wrapper parent or manifest. The first H1 supplies the title; keep it nonempty and at most 120 characters.
+- Limits: 20 MiB ZIP, 100 MiB extracted, 512 entries including directories, 2 MiB `slides.md`, and 4 MiB per HTML file. Use Stored or Deflated ZIP entries, supported file extensions, and safe ASCII paths. No symlinks, encryption, duplicates, or traversal. Consult `docs/slide-format.md` for precise validation rules.
+- Build a fresh ZIP from the directory containing `slides.md`: `python3 -m zipfile -c presentation.zip slides.md`. For sibling asset directories that exist, append `code images demo`. If `zip` is available, `zip -r presentation.zip slides.md code images demo` is an alternative. Do not ZIP their parent directory. The README has a complete curl example.
+- Every upload creates an immutable asset generation and replaces only the draft. Published versions and their assets never change on replacement. Publishing and starting sessions remain presenter UI actions; uploading alone does neither.
+- Use the response's `slug` for the shortlink. The `Location` header identifies the API resource; `<server-url>/<slug>` is the named shortlink and waiting page, not proof of publication. Bundle decks are read-only in the browser; subsequent changes require a complete replacement ZIP.
 - Handle non-success responses without exposing credentials. Report only the server's safe error message and the action needed.
 - After a successful draft upload, return a concise confirmation with the shortlink and note that publishing or presenting must be done in the presenter UI. Do not print the raw Markdown unless the user asks for both.
 

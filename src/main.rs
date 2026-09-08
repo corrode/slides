@@ -1,4 +1,5 @@
 mod archive;
+mod bundle;
 mod cli;
 mod error;
 mod live;
@@ -40,10 +41,10 @@ async fn serve() -> Result<()> {
         env::var("SLIDES_DATABASE_URL").unwrap_or_else(|_| "sqlite://slides.db".into());
     let bind_address = env::var("SLIDES_BIND").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let embed_dir = env::var("SLIDES_EMBED_DIR").unwrap_or_else(|_| "data/embeds".into());
-    let admin_password = env::var("SLIDES_ADMIN_PASSWORD")
-        .map_err(|_| anyhow::anyhow!("SLIDES_ADMIN_PASSWORD is required to start the server"))?;
+    let admin_password = env::var("ADMIN_PASSWORD")
+        .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD is required to start the server"))?;
     if admin_password.is_empty() {
-        anyhow::bail!("SLIDES_ADMIN_PASSWORD cannot be empty");
+        anyhow::bail!("ADMIN_PASSWORD cannot be empty");
     }
     let secure_cookies = env::var("SLIDES_SECURE_COOKIES")
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));

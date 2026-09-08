@@ -92,12 +92,8 @@ jobs:
     needs: image
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
       - name: Configure Coolify application
         env:
-          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL || 'https://admin.corrode.dev' }}
           COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
@@ -107,8 +103,8 @@ jobs:
 
           COOLIFY_TOKEN="${COOLIFY_TOKEN//[[:space:]]/}"
           COOLIFY_TOKEN="${COOLIFY_TOKEN#Bearer}"
-          if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${ADMIN_TOKEN}" ] || [ -z "${COOLIFY_RESOURCE_UUID}" ]; then
-            echo "The COOLIFY_TOKEN and ADMIN_TOKEN secrets and COOLIFY_RESOURCE_UUID variable are required." >&2
+          if [ -z "${COOLIFY_TOKEN}" ] || [ -z "${COOLIFY_RESOURCE_UUID}" ]; then
+            echo "The COOLIFY_TOKEN secret and COOLIFY_RESOURCE_UUID variable are required." >&2
             exit 1
           fi
 
@@ -146,9 +142,7 @@ jobs:
             echo "Configured ${key}."
           }
 
-          admin_env="$(jq --null-input --arg value "${ADMIN_TOKEN}" \
-            '{key: "SLIDES_ADMIN_PASSWORD", value: $value, is_preview: false, is_literal: true}')"
-          upsert_env SLIDES_ADMIN_PASSWORD "${admin_env}"
+
           upsert_env SLIDES_SECURE_COOKIES \
             '{"key":"SLIDES_SECURE_COOKIES","value":"true","is_preview":false,"is_literal":true}'
 
@@ -229,66 +223,3 @@ jobs:
           --retry-max-time 120
           --max-time 10
           "${DEPLOY_HEALTHCHECK_URL}"
-
-      - name: Publish the Intro to Rust deck
-        env:
-          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-          SLIDES_BASE_URL: https://slides.corrode.dev
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cookie_jar="$(mktemp)"
-          trap 'rm -f "${cookie_jar}"' EXIT
-
-          curl "${SLIDES_BASE_URL}/admin/login" \
-            --request POST \
-            --data-urlencode "password=${ADMIN_TOKEN}" \
-            --cookie-jar "${cookie_jar}" \
-            --fail \
-            --show-error \
-            --silent \
-            --output /dev/null
-
-          if ! grep --quiet 'slides_admin' "${cookie_jar}"; then
-            echo "Production admin login did not set the expected session cookie." >&2
-            exit 1
-          fi
-
-          editor_status="$(curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/edit" \
-            --cookie "${cookie_jar}" \
-            --output /dev/null \
-            --show-error \
-            --silent \
-            --write-out '%{http_code}')"
-          if [ "${editor_status}" = "404" ]; then
-            curl "${SLIDES_BASE_URL}/admin/decks" \
-              --request POST \
-              --cookie "${cookie_jar}" \
-              --data-urlencode "title=Intro to Rust" \
-              --data-urlencode "slug=intro-to-rust" \
-              --fail \
-              --show-error \
-              --silent \
-              --output /dev/null
-          elif [ "${editor_status}" != "200" ]; then
-            echo "Unexpected editor response: HTTP ${editor_status}." >&2
-            exit 1
-          fi
-
-          curl "${SLIDES_BASE_URL}/admin/decks/intro-to-rust/publish" \
-            --request POST \
-            --cookie "${cookie_jar}" \
-            --data-urlencode "title=Intro to Rust" \
-            --data-urlencode "source@examples/intro-to-rust.md" \
-            --data-urlencode "headline_font=inter" \
-            --data-urlencode "text_font=inter" \
-            --data-urlencode "code_font=jetbrains-mono" \
-            --data-urlencode "background=#282934" \
-            --data-urlencode "text=#e1e1e1" \
-            --data-urlencode "accent=#fc218a" \
-            --fail \
-            --show-error \
-            --silent \
-            --output /dev/null
-          echo "Published the Intro to Rust deck."
