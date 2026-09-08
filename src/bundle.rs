@@ -463,9 +463,11 @@ fn asset_url(value: &str, root: &Path, generation: &str, embed: bool) -> Result<
     let value = value.trim();
     if !embed
         && (value.starts_with('#')
-            || value.starts_with("https://")
-            || value.starts_with("http://")
-            || value.starts_with("mailto:"))
+            || ["https://", "http://", "mailto:"].iter().any(|prefix| {
+                value
+                    .get(..prefix.len())
+                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case(prefix))
+            }))
     {
         return Ok(value.to_owned());
     }
@@ -570,11 +572,18 @@ fn rewrite_iframes(source: &str, root: &Path, generation: &str) -> Result<String
 
 fn rewrite_markdown(source: &str, root: &Path, generation: &str) -> Result<String> {
     let mut links = Vec::new();
-    for (event, range) in Parser::new_ext(
-        source,
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
-    )
-    .into_offset_iter()
+    for (event, range) in crate::markdown::split_slides(source)
+        .into_iter()
+        .flat_map(|slide| {
+            // The splitter returns source slices; retain deck-relative edit offsets.
+            let offset = slide.as_ptr() as usize - source.as_ptr() as usize;
+            Parser::new_ext(
+                slide,
+                Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+            )
+            .into_offset_iter()
+            .map(move |(event, range)| (event, range.start + offset..range.end + offset))
+        })
     {
         let (url, title, image) = match event {
             Event::Start(Tag::Image {
@@ -594,7 +603,7 @@ fn rewrite_markdown(source: &str, root: &Path, generation: &str) -> Result<Strin
         links.push((range, resolved, title.into_string(), image));
     }
     // Process nested images before their enclosing links. Retain the original
-    // parser context so reference-style images still see the deck's definitions.
+    // parser context so reference-style images still see their slide's definitions.
     let mut edits: BTreeMap<usize, (usize, String)> = BTreeMap::new();
     for (range, resolved, title, image) in links.into_iter().rev() {
         let raw = &source[range.clone()];
@@ -794,6 +803,58 @@ mod tests {
         let bundle = run(&[("slides.md",b"# Deck\n[site](https://example.com)\n\n```md\n![x](missing.png)\n:::iframe src=\"missing.html\" title=\"X\" :::\n```\n")]).unwrap();
         assert!(bundle.source.contains("![x](missing.png)"));
     }
+    #[test]
+    fn reference_images_are_scoped_to_slides() {
+        for separator in ["\n---\n", "\r\n  ---  \r\n"] {
+            let source = format!(
+                "# First\n\n![first][pic]\n\n```md\n---\n```\n\n[pic]: first.png\n\n:::notes\n~~~~md\n---\n~~~~\n::: {separator}# Second\n\n[![second][pic]](https://example.com)\n\n[pic]: second.png\n"
+            );
+            let bundle = run(&[
+                ("slides.md", source.as_bytes()),
+                ("first.png", b"first"),
+                ("second.png", b"second"),
+            ])
+            .unwrap();
+            assert!(bundle.source.contains(separator));
+            let deck = crate::markdown::parse_deck(&bundle.source).unwrap();
+            assert_eq!(deck.slides.len(), 2);
+            assert!(
+                deck.slides[0]
+                    .html
+                    .contains("/assets/embeds/generation-1/first.png")
+            );
+            assert!(!deck.slides[0].html.contains("second.png"));
+            assert!(
+                deck.slides[1]
+                    .html
+                    .contains("/assets/embeds/generation-1/second.png")
+            );
+            assert!(!deck.slides[1].html.contains("first.png"));
+            assert!(deck.slides[0].notes.as_ref().unwrap().contains("---"));
+        }
+    }
+
+    #[test]
+    fn external_navigation_schemes_are_case_insensitive_but_images_stay_local() {
+        for destination in [
+            "HTTP://example.com/Path",
+            "hTtP://example.com/Path",
+            "HTTPS://example.com/Path",
+            "hTtPs://example.com/Path",
+            "MAILTO:Somebody@example.com",
+            "mAiLtO:Somebody@example.com",
+        ] {
+            let source = format!("# Deck\n[site]({destination})");
+            let bundle = run(&[("slides.md", source.as_bytes())]).unwrap();
+            assert!(bundle.source.contains(&format!("[site](<{destination}>)")));
+            let source = format!("# Deck\n![image]({destination})");
+            assert!(
+                run(&[("slides.md", source.as_bytes())]).is_err(),
+                "{destination}"
+            );
+        }
+    }
+
     #[test]
     fn nested_reference_images_and_code_labels() {
         assert!(

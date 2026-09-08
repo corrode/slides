@@ -216,7 +216,8 @@ fn read_code_reference(presentation_root: &Path, reference: &str) -> Result<Stri
         .with_context(|| format!("could not read code reference {reference:?} as UTF-8"))
 }
 
-fn split_slides(source: &str) -> Vec<&str> {
+/// Return nonempty slide source slices, ignoring separators inside code fences.
+pub fn split_slides(source: &str) -> Vec<&str> {
     let mut slides = Vec::new();
     let mut start = 0;
     let mut fence = None;
