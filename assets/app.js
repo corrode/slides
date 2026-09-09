@@ -1,6 +1,7 @@
 (() => {
   const previousBarValues = new Map();
   const reactionCounts = new Map();
+  const liveWidgetIdentity = new WeakMap();
   let slideBeforeSwap = null;
   let previewSlideBeforeSwap = 0;
   let pointerCard = null;
@@ -181,9 +182,11 @@
       } else if (liveConnectionState === "reconnecting") {
         status.classList.add("pending");
         status.textContent = "Reconnecting…";
-      } else if (liveConnectionState === "disconnected") {
+      } else if (liveConnectionState === "offline" || liveConnectionState === "disconnected") {
         status.classList.add("disconnected");
-        status.textContent = "Updates paused";
+        status.textContent = liveConnectionState === "offline" ? "Offline" : "Updates paused";
+      } else if (liveConnectionState === "ended") {
+        status.textContent = "Session ended";
       } else {
         status.classList.add("pending");
         status.textContent = "Connecting…";
@@ -191,17 +194,14 @@
     });
   }
 
-  function setLiveConnectionState(state) {
+  function setLiveConnectionState(state, message) {
     liveConnectionState = state;
     renderLiveConnectionState();
     const error = document.querySelector("#live-transport-error");
     if (!error) return;
-    if (state === "reconnecting" || state === "disconnected") {
+    if (["reconnecting", "offline", "disconnected"].includes(state)) {
       error.className = "notice error live-transport-error";
-      error.textContent =
-        state === "reconnecting"
-          ? "Live updates were interrupted. Reconnecting automatically…"
-          : "Live updates are paused. Reload the page to reconnect.";
+      error.textContent = message || "Live updates are paused. Reload the page to reconnect.";
     } else {
       error.replaceChildren();
       error.className = "";
@@ -721,14 +721,65 @@
     return mermaidLoadPromise;
   }
 
+  function widgetTheme(widget) {
+    const styles = window.getComputedStyle(widget);
+    return JSON.stringify([
+      currentColorScheme(),
+      ...[
+        "--bg", "--surface-raised", "--text", "--text-soft",
+        "--highlight", "--border-strong", "font-family",
+      ].map((name) => styles.getPropertyValue(name)),
+    ]);
+  }
+
+  function rememberLiveWidget(widget) {
+    const slide = widget.closest("#live-view[data-slide-index]");
+    if (!slide || !widget.closest(".slide-content")) return null;
+    const identity = {
+      slide: slide.dataset.slideIndex,
+      // Capture server markup before adding SVG, toolbars, or run results.
+      markup: liveWidgetIdentity.get(widget)?.markup ?? widget.outerHTML,
+      theme: widgetTheme(widget),
+    };
+    liveWidgetIdentity.set(widget, identity);
+    return identity;
+  }
+
+  function widgetIsCurrent(widget, identity) {
+    return widget.isConnected && (!identity || liveWidgetIdentity.get(widget) === identity);
+  }
+
+  // In vendored htmx 4, morph hooks are extension callbacks, not DOM events.
+  window.htmx?.registerExtension("live-widgets", {
+    htmx_before_morph_node(oldNode, { newNode }) {
+      const identity = liveWidgetIdentity.get(oldNode);
+      if (!identity) return;
+      if (
+        identity.slide === newNode.closest("#live-view[data-slide-index]")?.dataset.slideIndex &&
+        identity.markup === newNode.outerHTML &&
+        identity.theme === widgetTheme(oldNode)
+      ) {
+        return false;
+      }
+      // Let changed widgets morph normally, and discard any obsolete async render.
+      liveWidgetIdentity.delete(oldNode);
+    },
+  });
+
   async function renderMermaidDiagrams(root) {
-    const diagrams = root.querySelectorAll(
-      "[data-mermaid-diagram]:not([data-mermaid-state])",
-    );
+    const diagrams = [
+      ...root.querySelectorAll("[data-mermaid-diagram]:not([data-mermaid-state])"),
+    ]
+      .filter((diagram) => diagram.isConnected)
+      .map((diagram) => ({
+        diagram,
+        identity: rememberLiveWidget(diagram),
+      }));
     if (diagrams.length === 0) return;
 
     if (!(await loadMermaid())) {
-      diagrams.forEach((diagram) => {
+      diagrams.forEach(({ diagram, identity }) => {
+        if (!widgetIsCurrent(diagram, identity)) return;
         diagram.dataset.mermaidState = "error";
         const error = diagram.querySelector("[data-mermaid-error]");
         if (error) {
@@ -739,7 +790,8 @@
       return;
     }
 
-    for (const diagram of diagrams) {
+    for (const { diagram, identity } of diagrams) {
+      if (!widgetIsCurrent(diagram, identity)) continue;
       const source = diagram.querySelector("[data-mermaid-source]");
       const output = diagram.querySelector("[data-mermaid-output]");
       const error = diagram.querySelector("[data-mermaid-error]");
@@ -771,6 +823,7 @@
           sandbox.remove();
         }
 
+        if (!widgetIsCurrent(diagram, identity)) continue;
         output.innerHTML = result.svg;
         result.bindFunctions?.(output);
         source.hidden = true;
@@ -778,6 +831,7 @@
         output.hidden = false;
         diagram.dataset.mermaidState = "ready";
       } catch (renderError) {
+        if (!widgetIsCurrent(diagram, identity)) continue;
         console.warn("Could not render Mermaid diagram", renderError);
         output.replaceChildren();
         output.hidden = true;
@@ -797,6 +851,7 @@
   function initializeRustPlaygrounds(root = document) {
     if (document.body.matches("[data-print-deck]")) return;
     root.querySelectorAll(":is([data-rust-code], .rust-code[data-code-ide-url]):not([data-playground-ready])").forEach((block) => {
+      rememberLiveWidget(block);
       block.dataset.playgroundReady = "true";
 
       const toolbar = document.createElement("div");
@@ -1321,24 +1376,18 @@
     );
   });
 
-  document.addEventListener("htmx:sse:before:connection", (event) => {
-    if ((event.detail?.connection?.attempt || 0) > 0) setLiveConnectionState("reconnecting");
+  document.addEventListener("htmx:after:settle", (event) => {
+    // Successful snapshots used to clear this notice inside #live-view.
+    // Check the actual swap task so OOB-only error updates remain visible.
+    if (event.detail?.task?.target?.id === "live-view") {
+      document.querySelector(".live-notices #live-error")?.replaceChildren();
+    }
   });
 
-  document.addEventListener("htmx:sse:after:connection", () => {
-    setLiveConnectionState("connected");
-  });
-
-  document.addEventListener("htmx:sse:after:message", () => {
-    setLiveConnectionState("connected");
-  });
-
-  document.addEventListener("htmx:sse:error", () => {
-    setLiveConnectionState("reconnecting");
-  });
-
-  document.addEventListener("htmx:sse:close", (event) => {
-    if (event.detail?.reason === "ended") setLiveConnectionState("disconnected");
+  document.addEventListener("slides:live:connection", (event) => {
+    if (event.target.matches?.("[data-live-transport]")) {
+      setLiveConnectionState(event.detail.state, event.detail.message);
+    }
   });
 
   document.addEventListener("htmx:before:swap", () => {

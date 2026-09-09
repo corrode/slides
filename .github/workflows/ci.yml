@@ -42,8 +42,21 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-targets
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Validate browser JavaScript
-        run: node --check assets/app.js
+        run: |
+          node --check assets/app.js
+          node --check assets/live.js
+
+      - name: Test live transport and navigation in Chrome
+        timeout-minutes: 3
+        run: |
+          node tests/live-transport.mjs
+          node tests/live-widgets.mjs
 
       - name: Validate example presentations
         run: |

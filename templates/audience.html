@@ -7,16 +7,19 @@
   <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/htmx.min.js" defer></script>
-  <script src="/assets/hx-sse.min.js" defer></script>
   {% if has_mermaid %}
   <script src="/assets/vendor/mermaid/mermaid.min.js" defer></script>
   {% endif %}
   <script src="/assets/app.js" defer></script>
+  <script src="/assets/live.js" defer></script>
 </head>
 <body class="live-page" data-presentation-theme data-live-connection="connecting" style="{{ theme_style }}">
-  <div data-live-transport hx-sse:connect="{{ events_url }}" hx-target="#live-view" hx-swap="outerMorph"></div>
+  <div data-live-transport data-live-events="{{ events_url }}"></div>
   <p id="live-announcer" class="visually-hidden" role="status" aria-live="polite"></p>
-  <div id="live-transport-error" role="alert" aria-live="assertive"></div>
+  <div class="live-notices">
+    <div id="live-transport-error" role="alert" aria-live="assertive"></div>
+    <div id="live-error" role="alert" aria-live="assertive"></div>
+  </div>
   <div id="reaction-feed" class="reaction-feed" aria-hidden="true"></div>
   {{ initial_live|safe }}
 </body>

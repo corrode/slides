@@ -2736,15 +2736,21 @@ pre code {
   display: none;
 }
 
-#live-error:not(:empty),
-#live-transport-error:not(:empty) {
+.live-notices {
   position: fixed;
   z-index: 130;
   top: calc(var(--topbar-height) + 0.75rem);
   right: 50%;
+  display: flex;
   width: min(calc(100% - 2rem), 42rem);
-  box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 24%);
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--bg);
   transform: translateX(50%);
+}
+
+.live-notices > :not(:empty) {
+  box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 24%);
 }
 
 .audience-shell {

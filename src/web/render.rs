@@ -273,6 +273,9 @@ fn archived_reactions(reactions: &HashMap<String, i64>) -> String {
     }
 }
 
+// Share a gate outside #live-view so morphs cannot reset in-flight navigation.
+const NAVIGATION_REQUEST_ATTRIBUTES: &str = r#"hx-sync="body:drop" hx-config='{"timeout":"8s"}'"#;
+
 fn presenter_view(
     session: &LiveSession,
     version: &DeckVersion,
@@ -338,7 +341,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{questions}{notes}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" hx-disable=\"this\"{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" hx-disable=\"this\"{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" hx-disable=\"this\">{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" hx-disable=\"this\"{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{questions}{notes}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" {navigation_request}{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" {navigation_request}{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" {navigation_request}>{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" {navigation_request}{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -350,6 +353,7 @@ fn presenter_view(
         end_icon = icon("end"),
         slide_html = slide.html,
         reactions = reaction_buttons(&session.code, index, &data.reactions, false),
+        navigation_request = NAVIGATION_REQUEST_ATTRIBUTES,
         first_icon = icon("first"),
         previous_icon = icon("previous"),
         attention_icon = icon("attention"),
@@ -377,7 +381,7 @@ fn audience_view(
     let live_status = live_status(data.viewers);
     let questions = audience_questions(&session.code, &data.questions);
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><div id=\"live-error\" role=\"alert\" aria-live=\"assertive\"></div><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\" aria-label=\"Slide {position} of {slide_count}\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\" aria-label=\"Slide {position} of {slide_count}\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
@@ -1210,6 +1214,24 @@ mod tests {
     }
 
     #[test]
+    fn live_notice_targets_share_a_stack_outside_morphed_content() {
+        for template in [
+            include_str!("../../templates/presenter.html"),
+            include_str!("../../templates/audience.html"),
+        ] {
+            let (shell, _) = template.split_once("{{ initial_live|safe }}").unwrap();
+            let (_, stack) = shell.split_once("<div class=\"live-notices\">").unwrap();
+            let (stack, _) = stack.split_once("\n  </div>").unwrap();
+            for id in ["live-error", "live-transport-error"] {
+                assert_eq!(template.matches(&format!("id=\"{id}\"")).count(), 1);
+                assert!(stack.contains(&format!(
+                    "<div id=\"{id}\" role=\"alert\" aria-live=\"assertive\"></div>"
+                )));
+            }
+        }
+    }
+
+    #[test]
     fn live_toolbars_keep_essential_context_and_actions() {
         let document =
             parse_deck("# First\n\n:::notes\nMention **ownership** here.\n:::\n\n---\n\n# Second")
@@ -1249,6 +1271,8 @@ mod tests {
             0,
             &data,
         );
+        assert!(!presenter.contains("id=\"live-error\""));
+        assert!(!presenter.contains("id=\"live-transport-error\""));
         assert!(presenter.contains("class=\"presenter-toolbar\""));
         assert!(presenter.contains("Join code</span><strong>553675"));
         assert!(presenter.contains("Copy link"));
@@ -1257,7 +1281,26 @@ mod tests {
         assert!(presenter.contains(
             "href=\"/admin/decks/a-useful-deck/edit\" target=\"_blank\" rel=\"noopener\""
         ));
-        assert!(presenter.contains("data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/553675/first\" hx-swap=\"none\" hx-disable=\"this\" disabled"));
+        let assert_navigation = |html: &str, disabled: &[&str]| {
+            for action in ["first", "previous", "current", "next"] {
+                let control = html
+                    .split(&format!("data-nav=\"{action}\""))
+                    .nth(1)
+                    .unwrap()
+                    .split('>')
+                    .next()
+                    .unwrap();
+                assert!(control.contains(super::NAVIGATION_REQUEST_ATTRIBUTES));
+                assert!(!control.contains("hx-disable"));
+                assert_eq!(control.ends_with(" disabled"), disabled.contains(&action));
+            }
+        };
+        assert_navigation(&presenter, &["first", "previous"]);
+        // Other mutations retain their existing request-driven disabling.
+        assert!(
+            presenter
+                .contains("hx-post=\"/sessions/553675/lock\" hx-swap=\"none\" hx-disable=\"this\"")
+        );
         assert!(presenter.contains("data-presenter-notes"));
         assert!(presenter.contains("Mention <strong>ownership</strong> here."));
         assert!(!presenter.contains("Future slides locked"));
@@ -1272,9 +1315,7 @@ mod tests {
             &data,
         );
         assert!(presenter_on_second.contains("data-nav=\"first\""));
-        assert!(!presenter_on_second.contains(
-            "hx-post=\"/sessions/553675/first\" hx-swap=\"none\" hx-disable=\"this\" disabled"
-        ));
+        assert_navigation(&presenter_on_second, &["next"]);
 
         let audience = audience_view(
             &session,
@@ -1284,6 +1325,8 @@ mod tests {
             document.slides.len(),
             &data,
         );
+        assert!(!audience.contains("id=\"live-error\""));
+        assert!(!audience.contains("id=\"live-transport-error\""));
         assert!(audience.contains("class=\"audience-toolbar\""));
         assert!(audience.contains("class=\"nav-title\">A useful deck"));
         assert!(audience.contains("class=\"nav-position\">1/2"));

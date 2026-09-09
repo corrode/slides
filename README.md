@@ -167,6 +167,19 @@ Use relative paths for Markdown images and local links too, such as `![Diagram](
 
 Running a Rust code block sends that block's source through the Slides server to the public Rust Playground. The Slides container therefore needs outbound HTTPS access to `play.rust-lang.org`; the code runs in the Playground sandbox, not on the Slides host.
 
-HTMX 4.0.0, its `hx-sse` extension, and Mermaid 11.17.2 are vendored under `assets/`; the app has no frontend build step. The files come from their official jsDelivr packages. The SHA-256 checksums for `htmx.min.js`, `hx-sse.min.js`, and `vendor/mermaid/mermaid.min.js` are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f`, `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, and `581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8`, respectively.
+HTMX 4.0.0, its legacy `hx-sse` extension, and Mermaid 11.17.2 are vendored under `assets/`; the app has no frontend build step. Live pages use `assets/live.js` instead of the SSE extension. The files come from their official jsDelivr packages. The SHA-256 checksums for `htmx.min.js`, `hx-sse.min.js`, and `vendor/mermaid/mermaid.min.js` are `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f`, `8a834680c4000a9034d79228872372a92e140c810a075cb6d4a76690dfc13085`, and `581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8`, respectively.
 
-Live updates use an in-process broadcast hub, so the current version must run as a single application process. SQLite remains the durable source of truth.
+Live updates use native EventSource with automatic reconnect, a heartbeat watchdog, and recovery after going offline or returning to the page. The server sends data-bearing heartbeats every 15 seconds and disables proxy buffering. Navigation requests time out after eight seconds and are never automatically replayed: a lost response does not prove the server failed to move the slide. Concurrent navigation clicks are dropped while a request is in flight, rather than queued for later.
+
+Published decks are parsed and syntax-highlighted once per active session. Unchanged live updates preserve rendered diagrams and code-run results. Live updates use an in-process broadcast hub, so the current version must run as a single application process. SQLite remains the durable source of truth.
+
+## Browser regression tests
+
+Run the live transport and navigation tests with Node.js 22+ and Chrome or Chromium installed. No npm packages or running Slides server are needed; the harnesses start isolated local fixtures and temporary browser profiles, then clean up.
+
+```sh
+node tests/live-transport.mjs
+node tests/live-widgets.mjs
+```
+
+The harnesses detect common macOS/Linux browser paths. Pass the browser executable as the first argument or set `CHROME_BIN` for another location. These tests cover reconnects, stalled streams, HTTP failures, history restoration, navigation request races/timeouts, and preservation of unchanged Mermaid and Playground content. CI runs both suites.
