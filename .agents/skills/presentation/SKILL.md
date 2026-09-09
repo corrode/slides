@@ -39,6 +39,7 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 - Write for the audience, not the authoring conversation. Leave out references to prior prompts, revision requests, and private discussions. Include any context the audience needs to understand the point.
 - Work toward a clear outcome: what should the audience understand, decide, or do? Keep each slide focused on that outcome and cut material that does not help.
 - Be brief without becoming cryptic. Use plain, natural language and concrete details. Cut filler, not meaning; prefer a clear sentence to a puzzling fragment.
+- Optimize for reading speed throughout the presentation. The audience should grasp on-screen text quickly while following the speaker. Use familiar words, short sentences, and concise labels; move detail that requires sustained reading into presenter notes or supporting material.
 - Use a question as a slide heading when it helps establish the problem or explain why the content matters. Let the slide answer it; do not force every heading into a question.
 - Avoid ASCII art. Use Mermaid for diagrams when it makes relationships or steps easier to understand; use prose or a list when that is clearer.
 
@@ -46,7 +47,7 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 
 - Design a slide to support a spoken explanation, not to serve as a reference page. Choose one main element: a code example, diagram, comparison, statement, or audience question. Add only the context needed to understand it.
 - Make the first glance useful: the audience should see the topic and know where to look. A heading plus one main element is a good starting point, not a mandatory template. Do not stack a diagram, table, bold takeaway, blockquote, and source link just because each fits.
-- Write headings that name the specific question or conclusion. Keep them short enough to leave room for the content. Avoid vague exhortations such as “Choose one boundary to improve” when a concrete decision would tell the audience more.
+- Write simple, easy-to-understand headings that get straight to the point and name the specific question or conclusion. The audience should understand them at a glance, without decoding clever wording or jargon. Keep them short enough to leave room for the content. Avoid vague exhortations such as “Choose one boundary to improve” when a concrete decision would tell the audience more.
 - Let the example carry the explanation. Do not repeat the same point in the heading, body, bold text, and blockquote. Reserve blockquotes for actual quotations, not visual emphasis around ordinary instructions.
 - Use empty space to separate and emphasize content, not as a reason to add filler. Large unused margins around an unreadably small diagram mean the diagram needs a different layout, not more surrounding text.
 - Stay within the app's supported Markdown and theme controls. Do not invent columns, sizing attributes, or custom HTML to rescue an overloaded slide. Simplify or split it instead.
@@ -70,7 +71,8 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 
 Inspect every slide at the intended presentation size when a preview is available. Check the rendered output, not just the Markdown:
 
-- Is there one obvious focus, with a heading that helps explain it?
+- Is there one obvious focus, with a simple, direct heading that is understandable at a glance?
+- Can the audience read and grasp the slide quickly while still following the speaker?
 - Can the audience read every diagram label, code line, table cell, and poll choice without zooming?
 - Does every visible element add something, rather than repeat or distract?
 - Does the slide fit comfortably without clipping, awkward wrapping, or tiny content?
