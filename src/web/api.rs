@@ -513,6 +513,57 @@ mod tests {
             .unwrap()
     }
 
+    async fn publish_stored_draft(pool: &SqlitePool, deck: &Deck) -> i64 {
+        store::save_and_publish_deck(
+            pool,
+            deck.id,
+            &deck.title,
+            &deck.draft_source,
+            &deck.draft_source,
+            &Theme::from(deck),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn deck_form(title: &str, source: &str, theme: &Theme) -> String {
+        [
+            ("title", title),
+            ("source", source),
+            ("headline_font", &theme.headline_font),
+            ("text_font", &theme.text_font),
+            ("code_font", &theme.code_font),
+            ("background", &theme.background),
+            ("text", &theme.text),
+            ("accent", &theme.accent),
+        ]
+        .into_iter()
+        .map(|(name, value)| {
+            let encoded: String = value.bytes().map(|byte| format!("%{byte:02X}")).collect();
+            format!("{name}={encoded}")
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+    }
+
+    fn admin_get(path: &str) -> Request<Body> {
+        Request::builder()
+            .uri(path)
+            .header(header::COOKIE, format!("slides_admin={}", hash("cookie")))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn html_body(response: Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
     fn generations(directory: &FilePath) -> Vec<std::path::PathBuf> {
         let mut paths: Vec<_> = fs::read_dir(directory.join("embeds"))
             .unwrap()
@@ -679,7 +730,7 @@ mod tests {
                     .contains(&format!("/assets/embeds/{name_a}/{asset}"))
             );
         }
-        let version_a = store::publish_bundle_deck(&pool, deck_a.id).await.unwrap();
+        let version_a = publish_stored_draft(&pool, &deck_a).await;
 
         let source_b = source_a.replacen("# A", "# B", 1);
         let image_b = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><text>B</text></svg>";
@@ -744,17 +795,258 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bundle_browser_publish_ignores_forms_and_save_rejects_changes() {
+    async fn bundle_browser_edits_publish_submitted_source_and_preserve_live_snapshot() {
         let (directory, pool, app) = test_app().await;
+        let source = "# Imported\n\n![Image](image.svg)\n\n```rust code/main.rs\n```\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n";
+        let image = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><text>Original</text></svg>";
+        let demo = b"<!doctype html><html><body>Original demo</body></html>";
         assert_eq!(
             app.clone()
                 .oneshot(upload(
                     "demo",
-                    bundle_zip(
-                        "# Persisted\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n",
-                        "original"
-                    )
+                    bundle_zip_files(&[
+                        ("slides.md", source.as_bytes()),
+                        ("image.svg", image),
+                        ("demo.html", demo),
+                        (
+                            "code/main.rs",
+                            b"fn main() { println!(\"original & code\"); }"
+                        ),
+                    ])
                 ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let imported = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        let paths = generations(directory.path());
+        let generation = paths[0].file_name().unwrap().to_str().unwrap();
+        let response = app
+            .clone()
+            .oneshot(admin_get("/admin/decks/demo/edit"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let editor = html_body(response).await;
+        // Inspect the editable control, not a matching string in the rendered preview.
+        let textarea = editor.split_once("<textarea ").unwrap().1;
+        let (attributes, contents) = textarea.split_once('>').unwrap();
+        assert!(attributes.contains("name=\"source\""));
+        assert!(!attributes.contains("readonly"));
+        assert!(!attributes.contains("disabled"));
+        let editable =
+            html_escape::decode_html_entities(contents.split_once("</textarea>").unwrap().0);
+        assert_eq!(editable, imported.draft_source);
+        assert!(editable.contains("```rust\nfn main()"));
+        assert!(!editable.contains("code/main.rs"));
+        for asset in ["image.svg", "demo.html"] {
+            assert!(editable.contains(&format!("/assets/embeds/{generation}/{asset}")));
+        }
+        let theme = Theme {
+            headline_font: "georgia".into(),
+            text_font: "merriweather".into(),
+            code_font: "system-mono".into(),
+            background: "#102030".into(),
+            text: "#eeeeee".into(),
+            accent: "#abcdef".into(),
+        };
+        let saved_source = editable
+            .replace("# Imported", "# Browser saved")
+            .replace("original & code", "edited & code");
+        let response = app
+            .clone()
+            .oneshot(admin_form(
+                "demo",
+                "save",
+                &deck_form("Browser title", &saved_source, &theme),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(html_body(response).await.contains("Draft saved."));
+        let saved = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(saved.title, "Browser title");
+        assert_eq!(saved.draft_source, saved_source);
+        assert_eq!(Theme::from(&saved).style(), theme.style());
+        assert_eq!(generations(directory.path()), paths);
+
+        let printed_source = saved_source.replace("# Browser saved", "# Print submitted");
+        let response = app
+            .clone()
+            .oneshot(admin_form(
+                "demo",
+                "print",
+                &deck_form("Print title", &printed_source, &theme),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let printed = html_body(response).await;
+        assert!(printed.contains("Print title"));
+        assert!(printed.contains("Print submitted"));
+        assert!(!printed.contains("Browser saved"));
+        assert!(printed.contains("#102030"));
+        assert_eq!(
+            store::deck_by_slug(&pool, "demo")
+                .await
+                .unwrap()
+                .unwrap()
+                .draft_source,
+            saved_source
+        );
+
+        let published_source = saved_source.replace("# Browser saved", "# Publish submitted");
+        let response = app
+            .clone()
+            .oneshot(admin_form(
+                "demo",
+                "publish",
+                &deck_form("Published title", &published_source, &theme),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "/admin/decks/demo/edit?published=1"
+        );
+        let published_id: i64 =
+            sqlx::query_scalar("SELECT id FROM deck_versions WHERE deck_id = ?")
+                .bind(imported.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let published = store::get_version(&pool, published_id).await.unwrap();
+        assert_eq!(published.title, "Published title");
+        assert_eq!(published.source, published_source);
+        assert_eq!(Theme::from(&published).style(), theme.style());
+        assert_eq!(
+            store::deck_by_slug(&pool, "demo")
+                .await
+                .unwrap()
+                .unwrap()
+                .draft_source,
+            published_source
+        );
+
+        let live_source = published_source.replace("# Publish submitted", "# Live submitted");
+        let response = app
+            .clone()
+            .oneshot(admin_form(
+                "demo",
+                "sessions",
+                &deck_form("Live title", &live_source, &theme),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let presenter_url = response.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let active = store::active_session(&pool).await.unwrap().unwrap();
+        let session = store::get_session(&pool, active.id).await.unwrap();
+        let live_id = session.deck_version_id;
+        assert_ne!(live_id, published_id);
+        assert_eq!(presenter_url, format!("/present/{}", session.code));
+
+        for (action, expected) in [("save", StatusCode::OK), ("publish", StatusCode::SEE_OTHER)] {
+            let response = app
+                .clone()
+                .oneshot(admin_form(
+                    "demo",
+                    action,
+                    &deck_form("Later title", "# Later draft", &Theme::default()),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{action}");
+            if action == "save" {
+                assert!(
+                    html_body(response)
+                        .await
+                        .contains("Changes apply to the next session.")
+                );
+            }
+            let live = store::get_version(&pool, live_id).await.unwrap();
+            assert_eq!(live.source, live_source);
+            assert_eq!(live.title, "Live title");
+            assert_eq!(Theme::from(&live).style(), theme.style());
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(upload(
+                    "demo",
+                    bundle_zip("# Reuploaded", "replacement demo")
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            store::deck_by_slug(&pool, "demo")
+                .await
+                .unwrap()
+                .unwrap()
+                .draft_source,
+            "# Reuploaded"
+        );
+        assert_eq!(generations(directory.path()).len(), 2);
+        let live_session = store::get_session(&pool, active.id).await.unwrap();
+        assert_eq!(live_session.deck_version_id, live_id);
+        let live = store::get_version(&pool, live_id).await.unwrap();
+        assert_eq!(live.source, live_source);
+        assert_eq!(live.title, "Live title");
+        assert_eq!(Theme::from(&live).style(), theme.style());
+        assert_eq!(
+            store::get_version(&pool, published_id)
+                .await
+                .unwrap()
+                .source,
+            published_source
+        );
+        let response = app
+            .clone()
+            .oneshot(admin_get(&presenter_url))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let presenter = html_body(response).await;
+        assert!(presenter.contains("Live submitted"));
+        assert!(!presenter.contains("Reuploaded"));
+        assert!(!presenter.contains("Later draft"));
+        for (asset, original) in [
+            ("image.svg", image.as_slice()),
+            ("demo.html", demo.as_slice()),
+        ] {
+            assert_eq!(fs::read(paths[0].join(asset)).unwrap(), original);
+            let response = app
+                .clone()
+                .oneshot(admin_get(&format!("/assets/embeds/{generation}/{asset}")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = html_body(response).await;
+            if asset == "image.svg" {
+                assert_eq!(body.as_bytes(), original);
+            } else {
+                // HTML assets receive the navigation bridge when served.
+                assert!(body.contains("Original demo"));
+                assert!(!body.contains("replacement demo"));
+                assert!(body.contains("data-slides-navigation-bridge"));
+            }
+        }
+        assert_no_temporary_directories(directory.path());
+    }
+
+    #[tokio::test]
+    async fn bundle_browser_validates_forms_and_keeps_invalid_markdown_as_draft_only() {
+        let (directory, pool, app) = test_app().await;
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip("# Original", "original")))
                 .await
                 .unwrap()
                 .status(),
@@ -762,61 +1054,77 @@ mod tests {
         );
         let before = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
         let paths = generations(directory.path());
-        let tampered = "title=Tampered&source=%23+Tampered&headline_font=serif&text_font=serif&code_font=monospace&background=%23000000&text=%23ffffff&accent=%23ff0000";
-        for (index, body) in ["", tampered].into_iter().enumerate() {
-            let response = app
-                .clone()
-                .oneshot(admin_form("demo", "publish", body))
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::SEE_OTHER);
-            assert_eq!(
-                response.headers()[header::LOCATION],
-                "/admin/decks/demo/edit?published=1"
-            );
-            let versions: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM deck_versions WHERE deck_id = ? ORDER BY version_number",
-            )
-            .bind(before.id)
-            .fetch_all(&pool)
+        let theme = Theme::from(&before);
+        for action in ["save", "print", "publish", "sessions"] {
+            for (body, expected) in [
+                (String::new(), StatusCode::UNPROCESSABLE_ENTITY),
+                (deck_form("", "# Changed", &theme), StatusCode::BAD_REQUEST),
+                (
+                    deck_form("Changed", "# Changed", &theme)
+                        .replace("headline_font=", "headline_font=unsupported"),
+                    StatusCode::BAD_REQUEST,
+                ),
+                (
+                    deck_form("Changed", "# Changed", &theme)
+                        .replace("background=", "background=invalid"),
+                    StatusCode::BAD_REQUEST,
+                ),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(admin_form("demo", action, &body))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected, "{action}: {body}");
+                let after = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+                assert_eq!(
+                    serde_json::to_value(Presentation::from(&after)).unwrap(),
+                    serde_json::to_value(Presentation::from(&before)).unwrap()
+                );
+            }
+        }
+        let invalid = "# Invalid draft\n\n:::notes\nMissing closing delimiter";
+        let response = app
+            .clone()
+            .oneshot(admin_form(
+                "demo",
+                "save",
+                &deck_form("Invalid draft", invalid, &theme),
+            ))
             .await
             .unwrap();
-            assert_eq!(versions.len(), index + 1);
-            for version_id in versions {
-                let version = store::get_version(&pool, version_id).await.unwrap();
-                assert_eq!(version.title, before.title);
-                assert_eq!(version.source, before.draft_source);
-                assert_eq!(version.theme_headline_font, before.theme_headline_font);
-                assert_eq!(version.theme_text_font, before.theme_text_font);
-                assert_eq!(version.theme_code_font, before.theme_code_font);
-                assert_eq!(version.theme_background, before.theme_background);
-                assert_eq!(version.theme_text, before.theme_text);
-                assert_eq!(version.theme_accent, before.theme_accent);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(html_body(response).await.contains("Preview unavailable"));
+        for action in ["print", "publish", "sessions"] {
+            for source in [invalid, ""] {
+                let response = app
+                    .clone()
+                    .oneshot(admin_form(
+                        "demo",
+                        action,
+                        &deck_form("Rejected title", source, &theme),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{action}");
             }
-            let response = app
-                .clone()
-                .oneshot(admin_form("demo", "save", body))
+        }
+        let draft = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(draft.title, "Invalid draft");
+        assert_eq!(draft.draft_source, invalid);
+        assert!(store::active_session(&pool).await.unwrap().is_none());
+        let versions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deck_versions WHERE deck_id = ?")
+                .bind(before.id)
+                .fetch_one(&pool)
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            assert!(
-                String::from_utf8(body.to_vec())
-                    .unwrap()
-                    .contains("Bundle decks are read-only")
-            );
-            let after = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
-            assert_eq!(
-                serde_json::to_value(Presentation::from(&after)).unwrap(),
-                serde_json::to_value(Presentation::from(&before)).unwrap()
-            );
-            assert!(store::is_bundle_deck(&pool, after.id).await.unwrap());
-            assert_eq!(generations(directory.path()), paths);
-            assert_eq!(
-                fs::read_to_string(paths[0].join("demo.html")).unwrap(),
-                "original"
-            );
-        }
+        assert_eq!(versions, 0);
+        assert_eq!(generations(directory.path()), paths);
+        assert_eq!(
+            fs::read_to_string(paths[0].join("demo.html")).unwrap(),
+            "original"
+        );
     }
 
     #[tokio::test]
@@ -839,7 +1147,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!store::is_bundle_deck(&pool, legacy.id).await.unwrap());
+
         assert_eq!(
             app.clone()
                 .oneshot(upload("demo", bundle_zip("# Bundle", "bundle")))
@@ -852,12 +1160,20 @@ mod tests {
         assert_eq!(converted.id, legacy.id);
         assert_eq!(converted.title, "Bundle");
         assert_eq!(converted.draft_source, "# Bundle");
-        assert!(store::is_bundle_deck(&pool, converted.id).await.unwrap());
+
         assert_eq!(
-            app.oneshot(admin_form("demo", "publish", ""))
-                .await
-                .unwrap()
-                .status(),
+            app.oneshot(admin_form(
+                "demo",
+                "publish",
+                &deck_form(
+                    &converted.title,
+                    &converted.draft_source,
+                    &Theme::from(&converted)
+                )
+            ))
+            .await
+            .unwrap()
+            .status(),
             StatusCode::SEE_OTHER
         );
         let versions: Vec<i64> = sqlx::query_scalar(
@@ -1024,7 +1340,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let version_id = store::publish_bundle_deck(&pool, deck.id).await.unwrap();
+        let version_id = publish_stored_draft(&pool, &deck).await;
         store::start_session(&pool, deck.id, version_id)
             .await
             .unwrap();

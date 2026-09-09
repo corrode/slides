@@ -6,13 +6,13 @@ The current vertical slice supports:
 
 - Markdown decks separated by `---`, with presenter-only notes
 - Highlighted fenced code blocks, with sandboxed Rust execution through `play.rust-lang.org`
-- ZIP bundle drafts with read-only browser preview, publish, present, and print actions, plus immutable published versions
+- Browser-editable drafts with ZIP bundle import, preview, publish, present, and print actions, plus immutable published versions
 - Named shortlinks, six-digit session codes, and one live presentation per Slides instance
 - Presenter-controlled slide navigation, keyboard shortcuts, audience locking, and attention recall
 - Anonymous polls, word clouds, quizzes, card ordering, raised hands, audience questions with upvotes, and rate-limited reactions
 - Live horizontal and vertical result charts over Server-Sent Events
 - Responsive presenter and audience views
-- Independent headline, text, and code fonts plus color themes, configurable in the browser for legacy decks only; new bundles use defaults, and bundle replacements preserve the deck's existing theme
+- Independent headline, text, and code fonts plus color themes, configurable in the browser for all drafts; new imports use defaults, and bundle replacements preserve the deck's existing theme
 - A bearer-authenticated API for uploading complete presentation ZIP bundles, reading presentations, and deleting them
 
 ## Run it
@@ -71,7 +71,9 @@ curl --fail-with-body --request POST \
 
 For a deck with sibling `code/`, `images/`, and `demo/` directories, include them with `python3 -m zipfile -c presentation.zip slides.md code images demo`. Alternatively, from that same directory, use `zip -r presentation.zip slides.md code images demo` with a fresh output ZIP. Include only directories that exist; do not ZIP their parent folder.
 
-Each successful upload installs a new immutable asset generation and replaces only the draft. Published versions and their assets never change when a draft is replaced, including during a live session. In the browser, bundle decks are read-only: preview, publish, present, and print are available; changes require another complete ZIP upload. Existing legacy decks retain browser editing as a migration bridge. Publishing and starting live sessions remain presenter UI actions, not bundle upload side effects.
+ZIP bundles are import packaging, not a separate deck type. Every draft is browser editable: change its Markdown, inlined code, title, and theme, or preview, publish, present, and print it. Importing inlines referenced code and rewrites asset references to immutable generation URLs. Browser edits update the draft without changing imported files.
+
+Each successful upload installs a new immutable asset generation and replaces the entire draft content and title, including browser edits; it does not merge changes. The deck's existing theme, published versions and their assets, and running sessions are preserved. To update imported asset files, upload a complete replacement ZIP. Publishing and starting live sessions remain presenter UI actions, not bundle upload side effects.
 
 Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 
@@ -128,7 +130,7 @@ Code shipped in the bundle's `code/` directory can be included in full with an o
 ```
 ````
 
-Bundle uploads resolve the whole UTF-8 file into the draft; line ranges and snippets are not supported. Existing legacy decks still resolve paths under `examples/code/`, with contents snapshotted on publication.
+Bundle uploads inline the whole UTF-8 file into the editable draft; line ranges and snippets are not supported. Editing that code in the browser does not change the imported source file. Legacy code paths under `examples/code/` remain supported for compatibility, with contents snapshotted on publication; they do not define a separate deck type.
 
 Code fences also accept one optional trailing `ide="URL"` attribute, for inline code or an otherwise empty include:
 

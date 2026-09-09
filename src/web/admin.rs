@@ -42,7 +42,6 @@ struct DashboardTemplate {
 #[template(path = "editor.html")]
 struct EditorTemplate {
     deck: Deck,
-    is_bundle: bool,
     live_code: Option<String>,
     other_live: Option<(String, String)>,
     published: bool,
@@ -248,15 +247,11 @@ pub async fn editor(
         }
         None => (None, None),
     };
-    let is_bundle = store::is_bundle_deck(&state.pool, deck.id).await?;
+
     let (initial_preview, initial_notice) = match parse_deck(&deck.draft_source) {
         Ok(document) => (
             render::preview(&document, &Theme::from(&deck)),
-            if is_bundle {
-                "<span>Read-only bundle draft. Upload a new bundle through the API to make changes.</span>".into()
-            } else {
-                "<span>Changes save automatically.</span>".into()
-            },
+            "<span>Changes save automatically.</span>".into(),
         ),
         Err(error) => (
             "<div class=\"empty-state\">Preview unavailable until the Markdown is valid.</div>"
@@ -269,7 +264,6 @@ pub async fn editor(
     };
     template(EditorTemplate {
         deck,
-        is_bundle,
         live_code,
         other_live,
         published: query.published,
@@ -286,11 +280,7 @@ pub async fn save(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    if store::is_bundle_deck(&state.pool, deck.id).await? {
-        return Err(AppError::bad_request(
-            "Bundle decks are read-only. Upload a new bundle through the API to make changes.",
-        ));
-    }
+
     let Form(form) = match form {
         Ok(form) => form,
         Err(error) => return Ok(error.into_response()),
@@ -335,16 +325,7 @@ pub async fn print_deck(
     form: Result<Form<DeckForm>, FormRejection>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
-    let deck = required_deck(&state, &slug).await?;
-    if store::is_bundle_deck(&state.pool, deck.id).await? {
-        let document = parse_deck(&deck.draft_source)
-            .map_err(|error| AppError::bad_request(error.to_string()))?;
-        return template(PrintTemplate {
-            theme_style: Theme::from(&deck).style(),
-            title: deck.title,
-            slides: render::printable(&document),
-        });
-    }
+    required_deck(&state, &slug).await?;
     let Form(form) = match form {
         Ok(form) => form,
         Err(error) => return Ok(error.into_response()),
@@ -369,15 +350,11 @@ pub async fn publish(
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
-    if store::is_bundle_deck(&state.pool, deck.id).await? {
-        store::publish_bundle_deck(&state.pool, deck.id).await?;
-    } else {
-        let Form(form) = match form {
-            Ok(form) => form,
-            Err(error) => return Ok(error.into_response()),
-        };
-        publish_legacy_form(&state, deck.id, &form).await?;
-    }
+    let Form(form) = match form {
+        Ok(form) => form,
+        Err(error) => return Ok(error.into_response()),
+    };
+    publish_form(&state, deck.id, &form).await?;
     let location = format!("/admin/decks/{slug}/edit?published=1");
     if headers.contains_key("hx-request") {
         let mut response = StatusCode::NO_CONTENT.into_response();
@@ -403,15 +380,11 @@ pub async fn start_session(
     if let Some(session) = store::active_session(&state.pool).await? {
         return session_start_response(&state, &deck, session.id, &session.code).await;
     }
-    let version_id = if store::is_bundle_deck(&state.pool, deck.id).await? {
-        store::publish_bundle_deck(&state.pool, deck.id).await?
-    } else {
-        let Form(form) = match form {
-            Ok(form) => form,
-            Err(error) => return Ok(error.into_response()),
-        };
-        publish_legacy_form(&state, deck.id, &form).await?
+    let Form(form) = match form {
+        Ok(form) => form,
+        Err(error) => return Ok(error.into_response()),
     };
+    let version_id = publish_form(&state, deck.id, &form).await?;
     let session = store::start_session(&state.pool, deck.id, version_id).await?;
     // The store may return a competing session that started after our initial check.
     session_start_response(&state, &deck, session.id, &session.code).await
@@ -439,7 +412,7 @@ async fn session_start_response(
     ))).into_response())
 }
 
-async fn publish_legacy_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<i64> {
+async fn publish_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<i64> {
     validate_deck_form(form)?;
     let published_source = resolve_code_references(&form.source)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
@@ -525,7 +498,7 @@ mod tests {
 
     use super::EditorTemplate;
 
-    fn editor_template(is_bundle: bool) -> EditorTemplate {
+    fn editor_template() -> EditorTemplate {
         EditorTemplate {
             deck: Deck {
                 id: 1,
@@ -539,7 +512,6 @@ mod tests {
                 theme_text: "#e1e1e1".into(),
                 theme_accent: "#fc218a".into(),
             },
-            is_bundle,
             live_code: None,
             other_live: None,
             published: false,
@@ -550,7 +522,7 @@ mod tests {
 
     #[test]
     fn presentation_start_uses_a_native_form_submission() {
-        let template = editor_template(false);
+        let template = editor_template();
         let html = template.render().unwrap();
         assert!(html.contains("name=\"source\""));
         assert!(html.contains("name=\"title\""));
@@ -574,15 +546,15 @@ mod tests {
     }
 
     #[test]
-    fn bundle_preview_has_only_read_only_native_actions() {
-        let template = editor_template(true);
+    fn editor_has_editing_controls_and_publish_action() {
+        let template = editor_template();
         let html = template.render().unwrap();
         assert!(html.contains("<p>Stored preview</p>"));
-        for action in ["publish", "sessions", "print"] {
-            assert!(html.contains(&format!(
-                "method=\"post\" action=\"/admin/decks/demo/{action}\""
-            )));
-        }
+        assert!(html.contains(
+            "type=\"submit\" formmethod=\"post\" formaction=\"/admin/decks/demo/publish\">Publish"
+        ));
+        assert!(!html.contains("hx-post=\"/admin/decks/demo/publish\""));
+        assert!(html.contains("data-print-url=\"/admin/decks/demo/print\""));
         for editing_control in [
             "name=\"title\"",
             "name=\"source\"",
@@ -595,7 +567,7 @@ mod tests {
             "codemirror",
             "hx-post=",
         ] {
-            assert!(!html.contains(editing_control), "found {editing_control}");
+            assert!(html.contains(editing_control), "missing {editing_control}");
         }
         let live_html = EditorTemplate {
             live_code: Some("123456".into()),
@@ -605,7 +577,7 @@ mod tests {
         .unwrap();
         assert!(live_html.contains("href=\"/present/123456\""));
         assert!(!live_html.contains("action=\"/admin/decks/demo/sessions\""));
-        assert!(live_html.contains("action=\"/admin/decks/demo/publish\""));
+        assert!(live_html.contains("formaction=\"/admin/decks/demo/publish\""));
     }
 
     async fn test_state() -> (tempfile::TempDir, super::AppState) {
@@ -772,13 +744,11 @@ mod tests {
         let other = store::create_deck(&state.pool, "other", "Other")
             .await
             .unwrap();
-        let version = publish_legacy_form(&state, deck.id, &form()).await.unwrap();
+        let version = publish_form(&state, deck.id, &form()).await.unwrap();
         store::start_session(&state.pool, deck.id, version)
             .await
             .unwrap();
-        let other_version = publish_legacy_form(&state, other.id, &form())
-            .await
-            .unwrap();
+        let other_version = publish_form(&state, other.id, &form()).await.unwrap();
         // Reproduce the store result when another deck wins between the handler's checks.
         let returned = store::start_session(&state.pool, other.id, other_version)
             .await
@@ -845,22 +815,21 @@ mod tests {
 
     #[test]
     fn notices_preserve_base_feedback_and_escape_other_titles() {
-        for is_bundle in [false, true] {
-            let html = EditorTemplate {
-                other_live: Some(("123456".into(), "<script>Other</script>".into())),
-                published: true,
-                ..editor_template(is_bundle)
-            }
-            .render()
-            .unwrap();
-            assert!(html.contains("Published successfully."));
-            assert!(html.contains("Changes save automatically."));
-            assert!(html.contains("Open other presentation:"));
-            assert!(!html.contains("<script>Other</script>"));
-            assert!(html.contains("disabled>Present"));
-            assert!(!html.contains("Open live session"));
-            assert!(!html.contains("/admin/decks/demo/sessions"));
+        let html = EditorTemplate {
+            other_live: Some(("123456".into(), "<script>Other</script>".into())),
+            published: true,
+            ..editor_template()
         }
+        .render()
+        .unwrap();
+        assert!(html.contains("Published successfully."));
+        assert!(html.contains("Changes save automatically."));
+        assert!(html.contains("Open other presentation:"));
+        assert!(!html.contains("<script>Other</script>"));
+        assert!(html.contains("disabled>Present"));
+        assert!(!html.contains("Open live session"));
+        assert!(!html.contains("/admin/decks/demo/sessions"));
+        assert!(html.contains("formaction=\"/admin/decks/demo/publish\""));
     }
 
     #[test]

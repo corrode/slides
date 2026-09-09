@@ -250,25 +250,9 @@ pub async fn install_bundle_draft(
         .bind(deck_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        r#"INSERT INTO bundle_drafts (deck_id, generation) VALUES (?, ?)
-           ON CONFLICT(deck_id) DO UPDATE SET generation = excluded.generation"#,
-    )
-    .bind(deck_id)
-    .bind(generation)
-    .execute(&mut *tx)
-    .await?;
+
     tx.commit().await?;
     Ok(inserted.rows_affected() > 0)
-}
-
-pub async fn is_bundle_deck(pool: &SqlitePool, deck_id: i64) -> Result<bool> {
-    Ok(
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bundle_drafts WHERE deck_id = ?)")
-            .bind(deck_id)
-            .fetch_one(pool)
-            .await?,
-    )
 }
 
 pub async fn bundle_exists(pool: &SqlitePool, generation: &str) -> Result<bool> {
@@ -280,27 +264,6 @@ pub async fn bundle_exists(pool: &SqlitePool, generation: &str) -> Result<bool> 
         .fetch_one(pool)
         .await?,
     )
-}
-
-/// Snapshot the persisted bundle draft in one write statement, avoiding stale form data.
-pub async fn publish_bundle_deck(pool: &SqlitePool, deck_id: i64) -> Result<i64> {
-    Ok(sqlx::query_scalar(
-        r#"INSERT INTO deck_versions
-           (deck_id, version_number, title, source, theme_font, theme_headline_font,
-            theme_text_font, theme_code_font, theme_background, theme_text, theme_accent,
-            show_join_code, published_at)
-           SELECT d.id, (SELECT COALESCE(MAX(version_number), 0) + 1
-                         FROM deck_versions WHERE deck_id = d.id),
-                  d.title, d.draft_source, d.theme_font, d.theme_headline_font,
-                  d.theme_text_font, d.theme_code_font, d.theme_background, d.theme_text,
-                  d.theme_accent, 0, ?
-           FROM decks d JOIN bundle_drafts b ON b.deck_id = d.id WHERE d.id = ?
-           RETURNING id"#,
-    )
-    .bind(now_millis())
-    .bind(deck_id)
-    .fetch_one(pool)
-    .await?)
 }
 
 pub async fn save_deck(
@@ -315,7 +278,7 @@ pub async fn save_deck(
            SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
                theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
-           WHERE id = ? AND NOT EXISTS (SELECT 1 FROM bundle_drafts WHERE deck_id = decks.id)"#,
+           WHERE id = ?"#,
     )
     .bind(title)
     .bind(source)
@@ -330,10 +293,7 @@ pub async fn save_deck(
     .bind(id)
     .execute(pool)
     .await?;
-    anyhow::ensure!(
-        updated.rows_affected() == 1,
-        "Bundle drafts can only be replaced by upload"
-    );
+    anyhow::ensure!(updated.rows_affected() == 1, "Presentation not found");
     Ok(())
 }
 
@@ -352,7 +312,7 @@ pub async fn save_and_publish_deck(
            SET title = ?, draft_source = ?, theme_font = ?, theme_headline_font = ?,
                theme_text_font = ?, theme_code_font = ?, theme_background = ?,
                theme_text = ?, theme_accent = ?, updated_at = ?
-           WHERE id = ? AND NOT EXISTS (SELECT 1 FROM bundle_drafts WHERE deck_id = decks.id)"#,
+           WHERE id = ?"#,
     )
     .bind(title)
     .bind(draft_source)
@@ -368,10 +328,7 @@ pub async fn save_and_publish_deck(
     .execute(&mut *tx)
     .await?;
 
-    anyhow::ensure!(
-        updated.rows_affected() == 1,
-        "Bundle drafts must be published from stored contents"
-    );
+    anyhow::ensure!(updated.rows_affected() == 1, "Presentation not found");
     let version_number: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM deck_versions WHERE deck_id = ?",
     )

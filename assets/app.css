@@ -3564,6 +3564,7 @@ pre code {
   }
 
   .editor-topbar {
+    position: sticky;
     align-content: center;
     flex-wrap: wrap;
   }
@@ -3583,6 +3584,7 @@ pre code {
     display: block;
     height: auto;
     min-height: 100vh;
+    padding-top: 0;
   }
 
   .editor-layout {
@@ -3636,7 +3638,7 @@ pre code {
 
   .editor-shell {
     width: 100%;
-    padding-top: var(--topbar-height);
+    padding-top: 0;
     padding-bottom: 0;
   }
 
@@ -3644,35 +3646,6 @@ pre code {
     width: min(100% - 1.25rem, var(--content-width));
     padding-top: calc(var(--topbar-height) + 2.5rem);
     padding-bottom: 2rem;
-  }
-
-  .bundle-preview-topbar {
-    position: static;
-    flex-wrap: wrap;
-  }
-
-  .bundle-preview-topbar .editor-breadcrumb {
-    min-width: 0;
-    flex-basis: 100%;
-  }
-
-  .bundle-preview-topbar .brand {
-    flex-shrink: 0;
-  }
-
-  .bundle-preview-topbar .editor-breadcrumb > span:last-child {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .bundle-preview-topbar .topbar-actions {
-    flex: 1 1 100%;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .bundle-preview-topbar + .admin-shell {
-    padding-top: 2.5rem;
   }
 
   .presentation-grid {

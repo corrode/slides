@@ -5,7 +5,7 @@ description: Create or revise a presentation for this Slides app as a complete Z
 
 # Create a presentation bundle
 
-Deliver an editable source directory and an upload-ready ZIP for one presentation. Markdown is the entry point, not the entire deliverable. A Markdown-only presentation is still a bundle containing `slides.md`.
+Deliver an editable source directory and an upload-ready ZIP for one presentation. Markdown is the entry point, not the entire deliverable. A Markdown-only presentation is still a bundle containing `slides.md`. ZIP bundles are import packaging, not a separate deck type: all drafts are browser editable, including their Markdown, inlined code, title, and theme.
 
 When working in the Slides repository, use `docs/slide-format.md` as the syntax reference. Outside that repository, use `references/slide-format.md` relative to this skill's directory; the global installation includes a snapshot. References below to `docs/slide-format.md` mean whichever copy applies. If neither is available, obtain the reference from the user rather than guessing. Read its bundle rules and the sections relevant to the deck before authoring. Do not invent layout directives, metadata fields, API endpoints, or validation commands.
 
@@ -21,7 +21,7 @@ Distinguish the requested action:
 
 Saving files locally does not authorize uploading. Do not deploy the application, modify CI, or change server configuration as part of making a deck.
 
-For revisions, preserve the existing bundle's files and authoring paths. Change the requested content, then rebuild the complete archive. Do not return a patch as the presentation or upload only the changed files. The API's `source` field contains resolved Markdown, not a recoverable copy of the original multi-file bundle; prefer the local authoring directory or original ZIP.
+For local bundle revisions, preserve the existing files and authoring paths. Change the requested content, then rebuild the complete archive. Do not return a patch as the presentation or upload only the changed files. The API's `source` field contains the current draft's resolved Markdown, including browser edits, not a recoverable copy of the original multi-file bundle; prefer the local authoring directory or original ZIP for bundle authoring. Before replacing a draft, reconcile any browser edits the user wants to keep into the local source: a full ZIP replaces draft content and title rather than merging them. Browser edits do not update the original bundle files.
 
 ## 2. Plan the presentation
 
@@ -59,7 +59,7 @@ The archive contains the **contents** of `my-talk/`, not the parent directory.
 - Use `---` on its own line between slides. Do not add leading or trailing separators.
 - No frontmatter, `bundle.json`, theme metadata, or multi-file deck composition. Additional Markdown files are supporting material, not automatically included slides.
 - Use CommonMark with tables, strikethrough, task lists, and fenced code. Raw HTML in Markdown is not a layout mechanism.
-- Do not invent columns, reveal markers, slide classes, or background directives. New bundles use the app's default theme; replacement preserves an existing deck's theme.
+- Do not invent columns, reveal markers, slide classes, or background directives. New imports use the app's default theme. Every draft's theme is browser editable; replacement preserves the deck's existing theme.
 - Use at most one `:::notes` block and one interaction per slide. Close directive blocks with `:::` and consult the format reference for exact attributes.
 - Polls and ordering exercises need at least two items. Quizzes need at least two options and one marked correct answer. Word clouds have no body. Attribute values use double quotes, with no embedded quote escaping.
 - Keep reference-style link definitions on the slide using them; reference labels are slide-local.
@@ -73,7 +73,7 @@ Use inline fenced code for short examples. Put reusable or longer examples in re
 ```
 ````
 
-Includes expand the whole file at upload. Do not use line ranges, regions, placeholders, or extra fence arguments other than one trailing `ide="URL"` attribute. Use a longer fence if included content could close it.
+Includes expand the whole file into inline code at upload. That code is browser editable without changing the imported source file. Do not use line ranges, regions, placeholders, or extra fence arguments other than one trailing `ide="URL"` attribute. Use a longer fence if included content could close it.
 
 Optional IDE links work with inline code and includes:
 
@@ -106,7 +106,7 @@ Reference existing bundle-relative paths:
 ```
 
 - No external images or iframe URLs. Ordinary navigation links may use HTTP(S), mailto, `zed:`, or fragments. Keep supplied Zed URLs as clickable Markdown links, including in presenter notes; do not downgrade them to copyable text. For example: `[Open in Zed](zed://file/Users/example/project/main.rs:12:3)`. Targets refer to the viewer's Zed installation, are not bundled files, and may require browser permission to open. Preserve supplied paths rather than inventing local file locations.
-- Do not author `/assets/...` paths or fabricate generation URLs; the importer creates those. Do not link to `slides.md`, which is private source and may contain notes.
+- In ZIP source files, do not author `/assets/...` paths or fabricate generation URLs; the importer rewrites asset references to immutable generation URLs. Keep those generated URLs when editing the imported draft in the browser. Browser edits do not modify imported assets; changing asset files requires a complete replacement ZIP. Do not link to `slides.md`, which is private source and may contain notes.
 - Prefer a small fenced `mermaid` diagram when appropriate. Include accessibility text using `accTitle` and `accDescr` where supported; avoid custom scripts, initialization directives, and raw HTML.
 - HTML demos must be self-contained and trusted. Bundle their JavaScript, CSS, images, and fonts; resolve dependencies relative to the HTML/CSS file. No CDN dependencies, external fetches, or build/install steps on the server.
 - HTML runs in a sandbox without parent-page access, same-origin privileges, forms, popups, or fetch/WebSocket connections. Do not weaken that sandbox to make a demo work. A frame can navigate itself; sandboxing is not proof that arbitrary content is safe.
@@ -145,8 +145,8 @@ The API bearer token is separate from `ADMIN_PASSWORD`, which is for presenter l
 1. Choose a slug with the user’s intent. Slugs use 1–48 lowercase ASCII letters, digits, or hyphens, without leading/trailing hyphens; reserved routes are rejected. Check for an existing presentation before a new upload. Ask before replacing an unrelated deck.
 2. Send `POST /api/v1/presentations/{slug}/bundle` with `Authorization: Bearer <token>`, `Content-Type: application/zip`, and the ZIP as the raw body. No JSON payload, multipart form, separate embed upload, or PATCH request.
 3. Expect `201 Created` for creation or `200 OK` for replacement. Read the response rather than assuming success. `413` indicates size limits, `415` a content-type error, and `422` invalid bundle contents. Correct the underlying files/archive before retrying; never suppress validation failures.
-4. A successful upload replaces only the draft and installs immutable assets. Published versions and running sessions retain their previous contents. Further edits require another complete bundle upload.
-5. Provide `<server>/admin/decks/<slug>/edit` for authenticated preview and publishing. `<server>/<slug>` is the audience shortlink, not evidence that the new draft is published. The `Location` header points to the API resource, not the presenter UI.
+4. A successful upload installs immutable assets and replaces the draft content and title, including browser edits. It preserves the existing theme, published versions and their assets, and running sessions. The imported draft remains browser editable; another complete ZIP is needed only when replacing the import, not for every edit.
+5. Provide `<server>/admin/decks/<slug>/edit` for authenticated editing, preview, and publishing. `<server>/<slug>` is the audience shortlink, not evidence that the new draft is published. The `Location` header points to the API resource, not the presenter UI.
 
 If the user asks to publish, explain that they must choose Publish in the presenter UI; do not report an upload as publication. Never generate or rotate credentials automatically.
 

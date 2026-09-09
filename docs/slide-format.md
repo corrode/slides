@@ -19,6 +19,8 @@ The format intentionally does not derive navigation from heading levels, execute
 
 ## Presentation bundles
 
+ZIP bundles are import packaging, not a separate deck type. All drafts support browser editing of Markdown, code, title, and theme, as well as preview, publish, present, and print actions.
+
 Create or replace a draft with `POST /api/v1/presentations/{slug}/bundle`, `Authorization: Bearer <token>`, and a raw `application/zip` body. Creation returns `201 Created`; replacement returns `200 OK`. No JSON or multipart wrapper is accepted. The slug comes from the URL, not the title. There is no manifest or separate metadata file.
 
 The archive must contain the exact root filename `slides.md`, encoded as UTF-8. The first H1's text (including inline code text, with formatting removed) supplies the title. It must be nonempty; keep it at most 120 characters. Do not wrap the files in a parent directory:
@@ -42,7 +44,9 @@ From the directory containing these files, create a fresh archive with `python3 
 - Path segments use only ASCII letters, digits, `.`, `-`, and `_`. Empty segments, `.` or `..` segments, trailing dots, absolute paths, backslashes, spaces, percent-encoded paths, and non-ASCII names are rejected.
 - Allowed file extensions (case-insensitive): `rs`, `c`, `h`, `cpp`, `hpp`, `py`, `go`, `java`, `ts`, `tsx`, `jsx`, `sh`, `toml`, `json`, `yaml`, `yml`, `txt`, `css`, `js`, `mjs`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `ico`, `avif`, `woff`, `woff2`, `ttf`, `otf`, `md`, `html`, `htm`.
 
-Upload validation resolves code includes and local Markdown/iframe references, then validates Slides Markdown. Original files remain in a new immutable generation; the draft stores resolved Markdown. Replacing a draft never changes published versions or their assets. Bundle decks are read-only in the browser, with preview, publish, present, and print actions. Upload a complete replacement ZIP to revise them. Existing legacy decks retain browser editing as a migration bridge; their path behavior is called out below.
+Upload validation inlines code includes and rewrites local Markdown/iframe asset references to immutable generation URLs, then validates Slides Markdown. Original files remain in a new immutable generation; the draft stores resolved, browser-editable Markdown. Browser edits to Markdown, inlined code, title, or theme do not modify those imported files. Keep generated asset URLs when editing the imported draft; use bundle-relative paths in ZIP source files.
+
+A subsequent complete ZIP replaces the draft content and title, including browser edits, rather than merging changes. New imports use the default theme; replacements preserve the deck's existing theme. Published versions, their assets, and running sessions remain unchanged. To change imported asset files, upload a complete replacement ZIP. Legacy path handling remains available for compatibility as described below, not as a separate deck type.
 
 ## Document model
 
@@ -99,7 +103,9 @@ Executable examples live under `code/` in the ZIP and are referenced as the seco
 
 The first token selects syntax highlighting. The second is a path relative to the ZIP root and must start with `code/`. Uploading includes the **whole UTF-8 file** as ordinary inline code; there are no line ranges or snippet selectors. The only supported extra argument is one trailing `ide="URL"` attribute, preserved when the include expands. Missing files, unsafe paths, non-UTF-8 content, and fences that also contain inline code are rejected. If the referenced file contains a line that would close the fence, use a longer fence or the other fence marker.
 
-For existing legacy decks and repository CLI validation only, paths resolve relative to `examples/`, under `examples/code/`. Legacy draft previews read the current file; publication snapshots its contents. Bundle previews instead use the code resolved at upload time.
+Imported code becomes ordinary inline code that can be edited in the browser without modifying its original file. Previews use the draft's current inline code, including browser edits.
+
+For compatibility with unresolved legacy code references and repository CLI validation, paths resolve relative to `examples/`, under `examples/code/`. Previews of those references read the current file; publication snapshots its contents. This path compatibility does not define a separate deck type.
 
 ### Code fence IDE links
 
@@ -150,7 +156,7 @@ Trusted HTML pages included in the presentation ZIP can be placed on a slide wit
 
 Both attributes are required. `src` must reference an existing `.html` or `.htm` file in the ZIP. The block body must be empty. `title` must be meaningful for assistive technology and may contain at most 200 characters. The server rewrites the relative path to `/assets/embeds/<generation>/demo/index.html`; do not author that generated URL yourself.
 
-Existing legacy decks still use `/assets/embeds/<bundle>/index.html` references to server-local assets. Those absolute paths are not accepted as references in a new presentation ZIP.
+Legacy `/assets/embeds/<bundle>/index.html` references to server-local assets remain supported for compatibility. Those absolute paths are not accepted as references in a new presentation ZIP.
 
 Slides renders the page in a sandbox that allows scripts but does not grant same-origin access, forms, popups, downloads, top-level navigation, workers, or nested frames. Its content policy blocks cross-origin subresources and APIs such as `fetch`, WebSocket, and EventSource. An embed can still navigate its own frame to another page, so iframe bundles must be trusted local content. Embed HTML is also served with a response-level sandbox, including when opened directly, and archived copies receive an equivalent embedded content policy. Keep scripts, styles, images, fonts, and other dependencies in the same bundle and use relative URLs.
 
@@ -172,7 +178,7 @@ Inline and reference-style Markdown images and links are resolved at upload time
 
 Images and iframe sources cannot use remote URLs. Ordinary navigation links may still use `http://`, `https://`, `mailto:`, `zed:`, or a fragment identifier; these are not bundled resources. Schemes are case-insensitive. Zed links, for example `[Open in Zed](zed://file/Users/example/project/main.rs:12:3)`, remain clickable in slide content and presenter notes; their targets are not fetched or checked for existence. Opening them requires Zed's URL handler on the viewer's machine and may prompt for permission. `zed:` is allowed only for navigation, never as an image or iframe source. HTML may run sandboxed JavaScript, but scripts, styles, images, fonts, and other resources must be bundled, not loaded from CDNs or external services. HTML dependency URLs are left unchanged, not fetched or rewritten by the importer.
 
-For existing legacy decks, the Markdown renderer also accepts `/`-absolute paths and remote image URLs; unsupported schemes are replaced with `#`. This renderer behavior does not bypass bundle upload validation.
+For compatibility, the Markdown renderer also accepts `/`-absolute paths and remote image URLs; unsupported schemes are replaced with `#`. This renderer behavior does not bypass bundle upload validation or define a separate deck type.
 
 ### Presenter notes
 
