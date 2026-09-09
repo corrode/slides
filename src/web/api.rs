@@ -772,7 +772,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::SEE_OTHER);
             assert_eq!(
                 response.headers()[header::LOCATION],
-                "/admin/decks/demo/edit"
+                "/admin/decks/demo/edit?published=1"
             );
             let versions: Vec<i64> = sqlx::query_scalar(
                 "SELECT id FROM deck_versions WHERE deck_id = ? ORDER BY version_number",

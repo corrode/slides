@@ -90,7 +90,7 @@ Reference existing bundle-relative paths:
 :::
 ```
 
-- No external images or iframe URLs. Ordinary navigation links may use HTTP(S), mailto, or fragments.
+- No external images or iframe URLs. Ordinary navigation links may use HTTP(S), mailto, `zed:`, or fragments. Keep supplied Zed URLs as clickable Markdown links, including in presenter notes; do not downgrade them to copyable text. For example: `[Open in Zed](zed://file/Users/example/project/main.rs:12:3)`. Targets refer to the viewer's Zed installation, are not bundled files, and may require browser permission to open. Preserve supplied paths rather than inventing local file locations.
 - Do not author `/assets/...` paths or fabricate generation URLs; the importer creates those. Do not link to `slides.md`, which is private source and may contain notes.
 - Prefer a small fenced `mermaid` diagram when appropriate. Include accessibility text using `accTitle` and `accDescr` where supported; avoid custom scripts, initialization directives, and raw HTML.
 - HTML demos must be self-contained and trusted. Bundle their JavaScript, CSS, images, and fonts; resolve dependencies relative to the HTML/CSS file. No CDN dependencies, external fetches, or build/install steps on the server.

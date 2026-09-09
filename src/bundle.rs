@@ -463,11 +463,13 @@ fn asset_url(value: &str, root: &Path, generation: &str, embed: bool) -> Result<
     let value = value.trim();
     if !embed
         && (value.starts_with('#')
-            || ["https://", "http://", "mailto:"].iter().any(|prefix| {
-                value
-                    .get(..prefix.len())
-                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case(prefix))
-            }))
+            || ["https://", "http://", "mailto:", "zed:"]
+                .iter()
+                .any(|prefix| {
+                    value
+                        .get(..prefix.len())
+                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(prefix))
+                }))
     {
         return Ok(value.to_owned());
     }
@@ -852,6 +854,42 @@ mod tests {
                 run(&[("slides.md", source.as_bytes())]).is_err(),
                 "{destination}"
             );
+        }
+    }
+
+    #[test]
+    fn zed_navigation_survives_bundle_import_but_embeds_are_rejected() {
+        for url in [
+            "zed://file/Users/example/project/main.rs:12:3",
+            "ZeD://file/Users/example/My%20Project/main.rs",
+            "zed:///agent/skill?name=presentation&source=global",
+        ] {
+            let source = format!(
+                "# Deck\n[Open in Zed][editor]\n\n[editor]: {url}\n\n:::notes\n[Open example](<{url}>)\n:::"
+            );
+            let bundle = run(&[("slides.md", source.as_bytes())]).unwrap();
+            assert!(bundle.source.contains(url));
+            let deck = crate::markdown::parse_deck(&bundle.source).unwrap();
+            let link = format!(
+                "href=\"{}\"",
+                html_escape::encode_double_quoted_attribute(url)
+            );
+            assert!(deck.slides[0].html.contains(&link));
+            assert!(deck.slides[0].notes.as_ref().unwrap().contains(&link));
+            for source in [
+                format!("# Deck\n![Image](<{url}>)"),
+                format!("# Deck\n:::iframe src=\"{url}\" title=\"Demo\"\n:::"),
+            ] {
+                assert!(run(&[("slides.md", source.as_bytes())]).is_err());
+            }
+        }
+        for url in [
+            "zed-other:example",
+            "javascript:alert(1)",
+            "data:text/html,example",
+        ] {
+            let source = format!("# Deck\n[Unsupported](<{url}>)");
+            assert!(run(&[("slides.md", source.as_bytes())]).is_err());
         }
     }
 

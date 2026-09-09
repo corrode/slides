@@ -1,8 +1,10 @@
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, State, rejection::FormRejection},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    body::Body,
+    extract::{Path, Query, State, rejection::FormRejection},
+    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -25,6 +27,8 @@ use super::render;
 #[template(path = "login.html")]
 struct LoginTemplate {
     error: Option<String>,
+    next: String,
+    sign_in_required: bool,
 }
 
 #[derive(Template)]
@@ -40,6 +44,8 @@ struct EditorTemplate {
     deck: Deck,
     is_bundle: bool,
     live_code: Option<String>,
+    other_live: Option<(String, String)>,
+    published: bool,
     initial_notice: String,
     initial_preview: String,
 }
@@ -55,6 +61,63 @@ struct PrintTemplate {
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
     password: String,
+    #[serde(flatten)]
+    navigation: LoginQuery,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct LoginQuery {
+    next: Option<String>,
+    #[serde(default, deserialize_with = "published_flag")]
+    sign_in_required: bool,
+}
+
+fn safe_login_next(next: Option<&str>) -> &str {
+    let Some(next) = next else { return "/admin" };
+    if next == "/admin" {
+        return next;
+    }
+    if let Some(slug) = next
+        .strip_prefix("/admin/decks/")
+        .and_then(|path| path.strip_suffix("/edit"))
+        && (1..=48).contains(&slug.len())
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+    {
+        return next;
+    }
+    "/admin"
+}
+
+fn sign_in_redirect(destination: &str, htmx: bool) -> Response {
+    let destination = safe_login_next(Some(destination)).replace('/', "%2F");
+    let location = format!("/admin/login?next={destination}&sign_in_required=1");
+    if htmx {
+        // HTMX follows ordinary redirects internally; a non-3xx HX-Redirect navigates the page.
+        (StatusCode::NO_CONTENT, [("hx-redirect", location)]).into_response()
+    } else {
+        Redirect::to(&location).into_response()
+    }
+}
+
+pub(super) async fn guard_deck_auth(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(path) = request.uri().path().strip_prefix("/admin/decks/")
+        && !is_admin(&CookieJar::from_headers(request.headers()), &state)
+    {
+        let slug = path.split('/').next().unwrap_or_default();
+        return sign_in_redirect(
+            &format!("/admin/decks/{slug}/edit"),
+            request.headers().contains_key("hx-request"),
+        );
+    }
+    next.run(request).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,11 +132,20 @@ pub struct DeckForm {
     accent: String,
 }
 
-pub async fn login_page(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
+pub async fn login_page(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Query(query): Query<LoginQuery>,
+) -> AppResult<Response> {
+    let next = safe_login_next(query.next.as_deref());
     if is_admin(&jar, &state) {
-        return Ok(Redirect::to("/admin").into_response());
+        return Ok(Redirect::to(next).into_response());
     }
-    template(LoginTemplate { error: None })
+    template(LoginTemplate {
+        error: None,
+        next: next.into(),
+        sign_in_required: query.sign_in_required,
+    })
 }
 
 pub async fn login(
@@ -81,9 +153,12 @@ pub async fn login(
     jar: CookieJar,
     Form(form): Form<LoginForm>,
 ) -> AppResult<Response> {
+    let next = safe_login_next(form.navigation.next.as_deref());
     if !super::secrets_equal(&super::hash(&form.password), &state.admin_password_hash) {
         return template(LoginTemplate {
             error: Some("That password is not correct.".into()),
+            next: next.into(),
+            sign_in_required: form.navigation.sign_in_required,
         });
     }
 
@@ -93,7 +168,7 @@ pub async fn login(
         .same_site(SameSite::Strict)
         .secure(state.secure_cookies)
         .build();
-    Ok((jar.add(cookie), Redirect::to("/admin")).into_response())
+    Ok((jar.add(cookie), Redirect::to(next)).into_response())
 }
 
 pub async fn dashboard(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
@@ -141,18 +216,38 @@ pub async fn delete_ended_session(
     Ok(Redirect::to("/admin").into_response())
 }
 
+#[derive(Default, Deserialize)]
+pub struct EditorQuery {
+    #[serde(default, deserialize_with = "published_flag")]
+    published: bool,
+}
+
+fn published_flag<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(String::deserialize(deserializer)? == "1")
+}
+
 pub async fn editor(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(slug): Path<String>,
+    Query(query): Query<EditorQuery>,
 ) -> AppResult<Response> {
     if !is_admin(&jar, &state) {
-        return Ok(Redirect::to("/admin/login").into_response());
+        return Ok(sign_in_redirect(
+            &format!("/admin/decks/{slug}/edit"),
+            false,
+        ));
     }
     let deck = required_deck(&state, &slug).await?;
-    let live_code = store::active_session(&state.pool)
-        .await?
-        .map(|session| session.code);
+    let (live_code, other_live) = match store::active_session(&state.pool).await? {
+        Some(session) if session.deck_id == deck.id => (Some(session.code), None),
+        Some(session) => {
+            let live = store::get_session(&state.pool, session.id).await?;
+            let version = store::get_version(&state.pool, live.deck_version_id).await?;
+            (None, Some((session.code, version.title)))
+        }
+        None => (None, None),
+    };
     let is_bundle = store::is_bundle_deck(&state.pool, deck.id).await?;
     let (initial_preview, initial_notice) = match parse_deck(&deck.draft_source) {
         Ok(document) => (
@@ -176,6 +271,8 @@ pub async fn editor(
         deck,
         is_bundle,
         live_code,
+        other_live,
+        published: query.published,
         initial_notice,
         initial_preview,
     })
@@ -281,14 +378,17 @@ pub async fn publish(
         };
         publish_legacy_form(&state, deck.id, &form).await?;
     }
+    let location = format!("/admin/decks/{slug}/edit?published=1");
     if headers.contains_key("hx-request") {
         let mut response = StatusCode::NO_CONTENT.into_response();
-        response
-            .headers_mut()
-            .insert("hx-refresh", HeaderValue::from_static("true"));
+        response.headers_mut().insert(
+            "hx-redirect",
+            HeaderValue::from_str(&location)
+                .map_err(|_| AppError::bad_request("Invalid presentation URL."))?,
+        );
         Ok(response)
     } else {
-        Ok(Redirect::to(&format!("/admin/decks/{slug}/edit")).into_response())
+        Ok(Redirect::to(&location).into_response())
     }
 }
 
@@ -301,7 +401,7 @@ pub async fn start_session(
     require_admin(&jar, &state)?;
     let deck = required_deck(&state, &slug).await?;
     if let Some(session) = store::active_session(&state.pool).await? {
-        return Ok(Redirect::to(&format!("/present/{}", session.code)).into_response());
+        return session_start_response(&state, &deck, session.id, &session.code).await;
     }
     let version_id = if store::is_bundle_deck(&state.pool, deck.id).await? {
         store::publish_bundle_deck(&state.pool, deck.id).await?
@@ -313,7 +413,30 @@ pub async fn start_session(
         publish_legacy_form(&state, deck.id, &form).await?
     };
     let session = store::start_session(&state.pool, deck.id, version_id).await?;
-    Ok(Redirect::to(&format!("/present/{}", session.code)).into_response())
+    // The store may return a competing session that started after our initial check.
+    session_start_response(&state, &deck, session.id, &session.code).await
+}
+
+async fn session_start_response(
+    state: &AppState,
+    deck: &Deck,
+    session_id: i64,
+    code: &str,
+) -> AppResult<Response> {
+    let session_slug = store::deck_slug_for_session(&state.pool, session_id).await?;
+    if session_slug == deck.slug {
+        return Ok(Redirect::to(&format!("/present/{code}")).into_response());
+    }
+    let session = store::get_session(&state.pool, session_id).await?;
+    let version = store::get_version(&state.pool, session.deck_version_id).await?;
+    Ok((StatusCode::CONFLICT, Html(format!(
+        "<h1>Another presentation is live</h1><p>End the live session for <strong>{}</strong> before presenting <strong>{}</strong>.</p><p><a href=\"/present/{}\">Open other presentation: {}</a></p><p><a href=\"/admin/decks/{}/edit\">Return to this presentation</a></p>",
+        html_escape::encode_text(&version.title),
+        html_escape::encode_text(&deck.title),
+        html_escape::encode_double_quoted_attribute(code),
+        html_escape::encode_text(&version.title),
+        html_escape::encode_double_quoted_attribute(&deck.slug),
+    ))).into_response())
 }
 
 async fn publish_legacy_form(state: &AppState, deck_id: i64, form: &DeckForm) -> AppResult<i64> {
@@ -418,7 +541,9 @@ mod tests {
             },
             is_bundle,
             live_code: None,
-            initial_notice: String::new(),
+            other_live: None,
+            published: false,
+            initial_notice: "<span>Changes save automatically.</span>".into(),
             initial_preview: "<p>Stored preview</p>".into(),
         }
     }
@@ -481,6 +606,261 @@ mod tests {
         assert!(live_html.contains("href=\"/present/123456\""));
         assert!(!live_html.contains("action=\"/admin/decks/demo/sessions\""));
         assert!(live_html.contains("action=\"/admin/decks/demo/publish\""));
+    }
+
+    async fn test_state() -> (tempfile::TempDir, super::AppState) {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = crate::store::connect(&format!(
+            "sqlite://{}",
+            directory.path().join("slides.db").display()
+        ))
+        .await
+        .unwrap();
+        let state = super::AppState {
+            pool,
+            hub: std::sync::Arc::new(crate::live::LiveHub::default()),
+            admin_password_hash: "unused".into(),
+            admin_cookie: "test-cookie".into(),
+            secure_cookies: false,
+            embed_dir: directory.path().join("embeds"),
+        };
+        (directory, state)
+    }
+
+    fn jar(state: &super::AppState) -> super::CookieJar {
+        super::CookieJar::new().add(super::Cookie::new(
+            "slides_admin",
+            state.admin_cookie.clone(),
+        ))
+    }
+
+    fn form() -> super::DeckForm {
+        let theme = crate::models::Theme::default();
+        super::DeckForm {
+            title: "Demo".into(),
+            source: "# Demo".into(),
+            headline_font: theme.headline_font,
+            text_font: theme.text_font,
+            code_font: theme.code_font,
+            background: theme.background,
+            text: theme.text,
+            accent: theme.accent,
+        }
+    }
+
+    async fn body(response: super::Response) -> String {
+        String::from_utf8(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn editor_and_start_are_scoped_to_the_requested_deck() {
+        use super::*;
+        let (_directory, state) = test_state().await;
+        let deck = store::create_deck(&state.pool, "demo", "Demo")
+            .await
+            .unwrap();
+        store::create_deck(&state.pool, "other", "Other")
+            .await
+            .unwrap();
+        let html = body(
+            editor(
+                State(state.clone()),
+                jar(&state),
+                Path("other".into()),
+                Query(EditorQuery::default()),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(html.contains("formaction=\"/admin/decks/other/sessions\""));
+        assert!(!html.contains("Open live session"));
+        assert!(!html.contains("Another presentation is live"));
+
+        let response = start_session(
+            State(state.clone()),
+            jar(&state),
+            Path("demo".into()),
+            Ok(Form(form())),
+        )
+        .await
+        .unwrap();
+        let session = store::active_session(&state.pool).await.unwrap().unwrap();
+        assert_eq!(
+            response.headers()["location"],
+            format!("/present/{}", session.code)
+        );
+        let html = body(
+            editor(
+                State(state.clone()),
+                jar(&state),
+                Path("demo".into()),
+                Query(EditorQuery::default()),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(html.contains("Open live session"));
+        assert!(!html.contains("Another presentation is live"));
+        let response = start_session(
+            State(state.clone()),
+            jar(&state),
+            Path("demo".into()),
+            Ok(Form(form())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.headers()["location"],
+            format!("/present/{}", session.code)
+        );
+
+        let html = body(
+            editor(
+                State(state.clone()),
+                jar(&state),
+                Path("other".into()),
+                Query(EditorQuery::default()),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(html.contains("Open other presentation: Demo"));
+        assert!(html.contains("disabled>Present"));
+        assert!(!html.contains("Open live session"));
+        assert!(!html.contains("formaction=\"/admin/decks/other/sessions\""));
+        let response = start_session(
+            State(state.clone()),
+            jar(&state),
+            Path("other".into()),
+            Ok(Form(form())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(!response.headers().contains_key("location"));
+        assert!(
+            body(response)
+                .await
+                .contains("Open other presentation: Demo")
+        );
+        assert_eq!(
+            store::active_session(&state.pool)
+                .await
+                .unwrap()
+                .unwrap()
+                .deck_id,
+            deck.id
+        );
+    }
+
+    #[tokio::test]
+    async fn competing_store_result_is_checked_before_redirecting() {
+        use super::*;
+        let (_directory, state) = test_state().await;
+        let deck = store::create_deck(&state.pool, "demo", "Demo")
+            .await
+            .unwrap();
+        let other = store::create_deck(&state.pool, "other", "Other")
+            .await
+            .unwrap();
+        let version = publish_legacy_form(&state, deck.id, &form()).await.unwrap();
+        store::start_session(&state.pool, deck.id, version)
+            .await
+            .unwrap();
+        let other_version = publish_legacy_form(&state, other.id, &form())
+            .await
+            .unwrap();
+        // Reproduce the store result when another deck wins between the handler's checks.
+        let returned = store::start_session(&state.pool, other.id, other_version)
+            .await
+            .unwrap();
+        let response = session_start_response(&state, &other, returned.id, &returned.code)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(!response.headers().contains_key("location"));
+    }
+
+    #[tokio::test]
+    async fn publish_acknowledges_native_and_htmx_requests() {
+        use super::*;
+        let (_directory, state) = test_state().await;
+        store::create_deck(&state.pool, "demo", "Demo")
+            .await
+            .unwrap();
+        for htmx in [false, true] {
+            let mut headers = HeaderMap::new();
+            if htmx {
+                headers.insert("hx-request", HeaderValue::from_static("true"));
+            }
+            let response = publish(
+                State(state.clone()),
+                jar(&state),
+                Path("demo".into()),
+                headers,
+                Ok(Form(form())),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                response.headers()[if htmx { "hx-redirect" } else { "location" }],
+                "/admin/decks/demo/edit?published=1"
+            );
+            assert!(!response.headers().contains_key("hx-refresh"));
+        }
+        for (query, expected) in [
+            ("", false),
+            ("?published=1", true),
+            ("?published=0", false),
+            ("?published=%3Cscript%3E", false),
+        ] {
+            let Query(query) = Query::<EditorQuery>::try_from_uri(
+                &format!("/admin/decks/demo/edit{query}").parse().unwrap(),
+            )
+            .unwrap();
+            let html = body(
+                editor(
+                    State(state.clone()),
+                    jar(&state),
+                    Path("demo".into()),
+                    Query(query),
+                )
+                .await
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(html.contains("Published successfully."), expected);
+            assert!(html.contains("Changes save automatically."));
+        }
+    }
+
+    #[test]
+    fn notices_preserve_base_feedback_and_escape_other_titles() {
+        for is_bundle in [false, true] {
+            let html = EditorTemplate {
+                other_live: Some(("123456".into(), "<script>Other</script>".into())),
+                published: true,
+                ..editor_template(is_bundle)
+            }
+            .render()
+            .unwrap();
+            assert!(html.contains("Published successfully."));
+            assert!(html.contains("Changes save automatically."));
+            assert!(html.contains("Open other presentation:"));
+            assert!(!html.contains("<script>Other</script>"));
+            assert!(html.contains("disabled>Present"));
+            assert!(!html.contains("Open live session"));
+            assert!(!html.contains("/admin/decks/demo/sessions"));
+        }
     }
 
     #[test]

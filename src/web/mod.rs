@@ -133,6 +133,10 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("referrer-policy"),
             HeaderValue::from_static("strict-origin-when-cross-origin"),
         ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            admin::guard_deck_auth,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -421,6 +425,184 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    async fn response_text(response: axum::response::Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn stale_deck_requests_sign_in_without_replaying_mutations() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = test_state(&directory).await;
+        let deck = store::create_deck(&state.pool, "kgdb", "Original")
+            .await
+            .unwrap();
+        let app = router(state.clone());
+        let destination = "/admin/login?next=%2Fadmin%2Fdecks%2Fkgdb%2Fedit&sign_in_required=1";
+        let submitted = "title=Changed&source=%23+Changed&headline_font=inter&text_font=inter&code_font=jetbrains-mono&background=%23282934&text=%23e1e1e1&accent=%23fc218a";
+        for cookie in [None, Some("slides_admin=expired-before-restart")] {
+            for htmx in [false, true] {
+                for (method, action) in [
+                    ("GET", "edit"),
+                    ("POST", "publish"),
+                    ("POST", "save"),
+                    ("POST", "sessions"),
+                    ("POST", "delete"),
+                    ("POST", "print"),
+                ] {
+                    let mut request = Request::builder()
+                        .method(method)
+                        .uri(format!("/admin/decks/kgdb/{action}"))
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+                    if let Some(cookie) = cookie {
+                        request = request.header(header::COOKIE, cookie);
+                    }
+                    if htmx {
+                        request = request.header("hx-request", "true");
+                    }
+                    let response = app
+                        .clone()
+                        .oneshot(request.body(Body::from(submitted)).unwrap())
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        response.status(),
+                        if htmx {
+                            StatusCode::NO_CONTENT
+                        } else {
+                            StatusCode::SEE_OTHER
+                        }
+                    );
+                    assert_eq!(
+                        response.headers()[if htmx { "hx-redirect" } else { "location" }],
+                        destination
+                    );
+                }
+            }
+        }
+        let login_page = response_text(asset_request(&app, "GET", destination).await).await;
+        assert!(login_page.contains("name=\"next\" value=\"/admin/decks/kgdb/edit\""));
+        assert!(login_page.contains("Your previous action was not performed"));
+        for (password, correct) in [("wrong", false), ("password", true)] {
+            let response = app.clone().oneshot(Request::builder().method("POST").uri("/admin/login")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("password={password}&next=%2Fadmin%2Fdecks%2Fkgdb%2Fedit&sign_in_required=1"))).unwrap()).await.unwrap();
+            if !correct {
+                assert!(!response.headers().contains_key(header::SET_COOKIE));
+                let html = response_text(response).await;
+                assert!(html.contains("That password is not correct."));
+                assert!(html.contains("name=\"next\" value=\"/admin/decks/kgdb/edit\""));
+                assert!(html.contains("Your previous action was not performed"));
+                continue;
+            }
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(
+                response.headers()[header::LOCATION],
+                "/admin/decks/kgdb/edit"
+            );
+            let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+            assert!(cookie.contains("HttpOnly"));
+            assert!(cookie.contains("SameSite=Strict"));
+            let editor = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/admin/decks/kgdb/edit")
+                        .header(header::COOKIE, cookie.split(';').next().unwrap())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(editor.status(), StatusCode::OK);
+            assert!(response_text(editor).await.contains("Original"));
+        }
+        let after = store::deck_by_slug(&state.pool, "kgdb")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.title, deck.title);
+        assert_eq!(after.draft_source, deck.draft_source);
+        assert_eq!(
+            store::list_decks(&state.pool).await.unwrap()[0].published_versions,
+            0
+        );
+        assert!(store::active_session(&state.pool).await.unwrap().is_none());
+        // The deck guard must not turn bearer API failures into browser redirects.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/presentations")
+                    .header(
+                        header::COOKIE,
+                        format!("slides_admin={}", state.admin_cookie),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(!response.headers().contains_key(header::LOCATION));
+        assert!(!response.headers().contains_key("hx-redirect"));
+    }
+
+    #[tokio::test]
+    async fn login_rejects_unsafe_return_paths_on_get_and_post() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = test_state(&directory).await;
+        let app = router(state);
+        for destination in [
+            "https://evil.example",
+            "//evil.example",
+            "/admin/decks/kgdb/publish",
+            "/admin/decks/../edit",
+            "/admin/decks/a/b/edit",
+            "/admin/decks/-bad/edit",
+            "/admin/decks/kgdb/edit?next=https://evil.example",
+            "/admin/decks/kgdb/edit#fragment",
+            "/admin/decks/%2e%2e/edit",
+            "/admin/decks/kgdb\\evil/edit",
+            "/admin/settings",
+        ] {
+            let encoded: String = destination
+                .bytes()
+                .map(|byte| format!("%{byte:02X}"))
+                .collect();
+            let html = response_text(
+                asset_request(&app, "GET", &format!("/admin/login?next={encoded}")).await,
+            )
+            .await;
+            assert!(
+                html.contains("name=\"next\" value=\"/admin\""),
+                "{destination}"
+            );
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/admin/login")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(format!("password=password&next={encoded}")))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(
+                response.headers()[header::LOCATION],
+                "/admin",
+                "{destination}"
+            );
+        }
     }
 
     async fn register_bundle(state: &AppState, generation: &str) {

@@ -713,7 +713,7 @@ fn render_markdown(source: &str) -> String {
             Event::Start(Tag::Link {
                 dest_url, title, ..
             }) => {
-                let destination = safe_destination(dest_url);
+                let destination = safe_link_destination(dest_url);
                 let title = if title.is_empty() {
                     String::new()
                 } else {
@@ -762,6 +762,18 @@ fn render_markdown(source: &str) -> String {
 fn is_external_destination(destination: &str) -> bool {
     let destination = destination.trim().to_ascii_lowercase();
     destination.starts_with("http://") || destination.starts_with("https://")
+}
+
+fn safe_link_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
+    if destination
+        .trim()
+        .get(..4)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("zed:"))
+    {
+        destination
+    } else {
+        safe_destination(destination)
+    }
 }
 
 fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
@@ -1156,6 +1168,29 @@ mod tests {
             "href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\""
         ));
         assert!(html.contains("href=\"/join\">local</a>"));
+    }
+
+    #[test]
+    fn zed_links_remain_clickable_but_are_not_image_sources() {
+        for url in [
+            "zed://file/Users/example/project/main.rs:12:3",
+            "ZED://file/Users/example/My%20Project/main.rs",
+            "zed:///agent/skill?name=presentation&source=global",
+        ] {
+            let source = format!(
+                "[Open in Zed](<{url}>)\n\n![Not an image](<{url}>)\n\n:::notes\n[Notes link](<{url}>)\n:::"
+            );
+            let deck = parse_deck(&source).unwrap();
+            let destination = html_escape::encode_double_quoted_attribute(url);
+            let link = format!("href=\"{destination}\"");
+            assert!(deck.slides[0].html.contains(&link));
+            assert!(deck.slides[0].notes.as_ref().unwrap().contains(&link));
+            assert!(deck.slides[0].html.contains("src=\"#\""));
+            assert!(!deck.slides[0].html.contains("target=\"_blank\""));
+        }
+        let deck = parse_deck("[Other](zed-other:example) [Unsafe](javascript:alert(1))").unwrap();
+        assert!(!deck.slides[0].html.contains("href=\"zed-other:"));
+        assert!(!deck.slides[0].html.contains("href=\"javascript:"));
     }
 
     #[test]

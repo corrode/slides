@@ -20,8 +20,11 @@
         <h1 id="login-title">Welcome back</h1>
         <p>Sign in with the password configured for this Slides installation.</p>
       </div>
+      {% if sign_in_required %}<p class="notice" role="status">Please sign in again to return to your draft. Your previous action was not performed; submit it again after signing in.</p>{% endif %}
       {% match error %}{% when Some with (message) %}<div class="notice error" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
       <form method="post" action="/admin/login">
+        <input type="hidden" name="next" value="{{ next }}">
+        {% if sign_in_required %}<input type="hidden" name="sign_in_required" value="1">{% endif %}
         <label for="presenter-password">Password</label>
         <input id="presenter-password" type="password" name="password" required autofocus autocomplete="current-password">
         <button type="submit">Sign in</button>

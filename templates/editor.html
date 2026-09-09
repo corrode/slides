@@ -16,7 +16,7 @@
 </head>
 <body class="{% if is_bundle %}admin-page{% else %}editor-page{% endif %}">
   {% if is_bundle %}
-  <header class="topbar admin-topbar">
+  <header class="topbar admin-topbar bundle-preview-topbar">
     <nav class="editor-breadcrumb" aria-label="Presentation preview">
       <a class="brand" href="/admin">Slides</a>
       <span class="breadcrumb-separator" aria-hidden="true">/</span>
@@ -28,7 +28,7 @@
       <form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/publish"><button class="secondary small" type="submit">Publish</button></form>
       {% match live_code %}
         {% when Some with (code) %}<a class="button small" href="/present/{{ code }}">Open live session</a>
-        {% when None %}<form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/sessions"><button class="small" type="submit">Present</button></form>
+        {% when None %}{% if other_live.is_some() %}<button class="small" type="button" disabled>Present</button>{% else %}<form class="inline-form" method="post" action="/admin/decks/{{ deck.slug }}/sessions"><button class="small" type="submit">Present</button></form>{% endif %}
       {% endmatch %}
     </div>
   </header>
@@ -36,6 +36,8 @@
     <header class="admin-heading">
       <p class="eyebrow">Bundle draft · Read-only</p>
       <h1>{{ deck.title }}</h1>
+      {% if published %}<p class="notice deck-notice" role="status"><span>Published successfully. Live sessions are unchanged.</span></p>{% endif %}
+      {% if let Some((code, title)) = other_live %}<p class="notice deck-notice" role="status"><span>Another presentation is live: <strong>{{ title }}</strong>. End its session before presenting this deck. <a href="/present/{{ code }}">Open other presentation: {{ title }}</a></span></p>{% endif %}
       <div id="notice" role="status">{{ initial_notice|safe }}</div>
       <p>Review the stored draft below. Publish makes a version available; Present publishes the draft and starts a live session.</p>
     </header>
@@ -62,7 +64,7 @@
         </div>
         {% match live_code %}
           {% when Some with (code) %}<a class="button small" href="/present/{{ code }}"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v12H5zM9 20h6M12 16v4"/></svg>Open live session</a>
-          {% when None %}<button class="small" type="submit" formmethod="post" formaction="/admin/decks/{{ deck.slug }}/sessions"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>Present</button>
+          {% when None %}{% if other_live.is_some() %}<button class="small" type="button" disabled>Present</button>{% else %}<button class="small" type="submit" formmethod="post" formaction="/admin/decks/{{ deck.slug }}/sessions"><svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>Present</button>{% endif %}
         {% endmatch %}
       </div>
     </header>
@@ -110,6 +112,12 @@
     </aside>
 
     <main class="shell editor-shell">
+      {% if published || other_live.is_some() %}
+      <div class="editor-notices">
+        {% if published %}<p class="notice deck-notice" role="status"><span>Published successfully. Live sessions are unchanged.</span></p>{% endif %}
+        {% if let Some((code, title)) = other_live %}<p class="notice deck-notice" role="status"><span>Another presentation is live: <strong>{{ title }}</strong>. End its session before presenting this deck. <a href="/present/{{ code }}">Open other presentation: {{ title }}</a></span></p>{% endif %}
+      </div>
+      {% endif %}
       <div class="save-feedback" aria-label="Draft status">
         <span class="save-feedback-label">Draft</span>
         <div id="notice" role="status" aria-live="polite">{{ initial_notice|safe }}</div>
