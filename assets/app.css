@@ -2157,7 +2157,9 @@ pre code {
   gap: 0.35rem;
 }
 
-.playground-toolbar button {
+.playground-toolbar button,
+.playground-toolbar .button {
+  width: 2.25rem;
   min-height: 2.25rem;
   flex: 0 0 auto;
   border-color: rgb(255 255 255 / 25%);
@@ -4075,6 +4077,7 @@ pre code {
   .print-toolbar,
   .archive-toolbar,
   .archive-note,
+  .playground-toolbar,
   .presenter-toolbar,
   .audience-toolbar,
   .audience-actions,

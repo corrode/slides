@@ -411,12 +411,9 @@ fn resolve_code(source: &str, root: &Path) -> Result<String> {
                 regular = None;
             }
         } else if let Some((fence, info)) = opening(line) {
-            let tokens: Vec<_> = info.split_whitespace().collect();
-            if tokens.get(1).is_some_and(|path| path.starts_with("code/")) {
-                if tokens.len() != 2 {
-                    return Err(invalid("code fence accepts only language and code/path"));
-                }
-                let path = tokens[1];
+            let info = crate::markdown::parse_code_fence_info(info)
+                .map_err(|error| invalid(format!("invalid code fence: {error:#}")))?;
+            if let Some(path) = info.reference {
                 validate_path(path)?;
                 if !root.join(path).is_file() {
                     return Err(invalid(format!("missing code reference: {path}")));
@@ -438,7 +435,7 @@ fn resolve_code(source: &str, root: &Path) -> Result<String> {
                 let indentation = line.len() - line.trim_start().len();
                 result.push_str(&line[..indentation]);
                 result.extend(std::iter::repeat_n(fence.marker as char, fence.length));
-                result.push_str(tokens[0]);
+                result.push_str(&info.resolved_info());
                 result.push('\n');
                 result.push_str(&code);
                 if !code.ends_with('\n') {
@@ -723,6 +720,66 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         extract(&zip(entries), directory.path(), "generation-1")
     }
+    #[test]
+    fn bundle_ide_metadata_survives_resolution_and_reload() {
+        let source = b"# A `code` title\n\n```rust code/main.rs ide=\"vscode://file/a%20b.rs?line=2&column=1#main\"\n```\n\n```python ide=\"zed://file/a.py\"\nprint(1)\n```";
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = extract(
+            &zip(&[("slides.md", source), ("code/main.rs", b"fn main() {}")]),
+            directory.path(),
+            "g1",
+        )
+        .unwrap();
+        assert_eq!(bundle.title, "A code title");
+        assert_eq!(
+            fs::read(directory.path().join("slides.md")).unwrap(),
+            source
+        );
+        assert!(bundle.source.contains(
+            "```rust ide=\"vscode://file/a%20b.rs?line=2&column=1#main\"\nfn main() {}\n```"
+        ));
+        assert!(!bundle.source.contains("code/main.rs"));
+        let html = &crate::markdown::parse_deck(&bundle.source).unwrap().slides[0].html;
+        assert!(html.contains("class=\"rust-code\" data-rust-code data-code-ide-url=\"vscode://file/a%20b.rs?line=2&amp;column=1#main\""));
+        assert!(html.contains("class=\"rust-code\" data-code-ide-url=\"zed://file/a.py\""));
+        assert_eq!(html.matches("data-rust-code").count(), 1);
+        assert!(!html.contains("ide=\""));
+    }
+
+    #[test]
+    fn bundle_rejects_invalid_ide_metadata_inline_and_in_references() {
+        for language in ["rust", "mermaid"] {
+            for reference in ["", " code/main.rs"] {
+                for attribute in [
+                    "ide=\"javascript:bad\"",
+                    "ide=\"file:///tmp/a\"",
+                    "ide=\"unknown:a\"",
+                    "ide='zed://a'",
+                    "ide=\"zed://a b\"",
+                    "ide=\"zed://a\" ide=\"zed://b\"",
+                    "ide=\"zed://a\"junk",
+                    "ide=\"zed://a",
+                ] {
+                    let source = format!("# Title\n\n```{language}{reference} {attribute}\n```");
+                    let error = run(&[
+                        ("slides.md", source.as_bytes()),
+                        ("code/main.rs", b"fn main() {}"),
+                    ])
+                    .unwrap_err();
+                    assert!(matches!(error, BundleError::Invalid(_)));
+                    assert!(error.to_string().to_lowercase().contains("ide"), "{error}");
+                }
+            }
+        }
+        assert!(
+            run(&[(
+                "slides.md",
+                b"# Title\n```mermaid ide=\"zed://a\"\ngraph TD\n```"
+            )])
+            .is_err()
+        );
+    }
+
     #[test]
     fn resolves_bundle_and_preserves_original() {
         let source = b"# A **deck**\n\n![plot][p]\n\n[p]: img.png\n\n[code](code/main.rs)\n\n```rust code/main.rs\n```\n\n:::iframe\nsrc=\"demo/index.html\"\ntitle=\"Example\"\n:::\n";

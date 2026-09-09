@@ -121,6 +121,109 @@ fn inside_fence(line: &str, fence: &mut Option<Fence>) -> bool {
     }
 }
 
+/// Parsed fence metadata, shared by rendering and both code-reference resolvers.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CodeFenceInfo<'a> {
+    pub language: &'a str,
+    pub reference: Option<&'a str>,
+    pub ide_url: Option<&'a str>,
+}
+
+impl CodeFenceInfo<'_> {
+    /// Info string for an inlined reference, retaining its IDE metadata.
+    pub fn resolved_info(&self) -> String {
+        match self.ide_url {
+            Some(url) => format!("{} ide=\"{url}\"", self.language),
+            None => self.language.to_owned(),
+        }
+    }
+}
+
+/// Parse `language [code/path] [ide="URL"]`; unrelated plain fence info is unchanged.
+/// IDE URLs must use an explicitly supported editor scheme and contain no raw
+/// whitespace, controls, quotes, backslashes, or HTML delimiters.
+pub fn parse_code_fence_info(info: &str) -> Result<CodeFenceInfo<'_>> {
+    let mut tokens = info.split_whitespace();
+    let language = tokens.next().unwrap_or("");
+    if language.starts_with("ide=") {
+        bail!("IDE metadata requires a language before ide=\"URL\"");
+    }
+    let mut rest: Vec<_> = tokens.collect();
+    let reference = rest
+        .first()
+        .copied()
+        .filter(|token| token.starts_with("code/"));
+    if reference.is_some() {
+        rest.remove(0);
+    }
+    let has_ide = rest.iter().any(|token| {
+        token
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+            .next()
+            == Some("ide")
+    });
+    if !has_ide && reference.is_none() {
+        return Ok(CodeFenceInfo {
+            language,
+            reference,
+            ide_url: None,
+        });
+    }
+    let ide_url = match rest.as_slice() {
+        [] if !has_ide => None,
+        [attribute] => Some(
+            attribute
+                .strip_prefix("ide=\"")
+                .and_then(|value| value.strip_suffix('"'))
+                .context("code fence IDE metadata must be exactly ide=\"URL\" (double-quoted)")?,
+        ),
+        _ => bail!(
+            "code fence accepts a language, optional code/path, and one ide=\"URL\" attribute; malformed or duplicate IDE metadata"
+        ),
+    };
+    if let Some(url) = ide_url {
+        if language.eq_ignore_ascii_case("mermaid") {
+            bail!("Mermaid fences do not support ide metadata");
+        }
+        let allowed = url.split_once(':').is_some_and(|(scheme, destination)| {
+            !destination.is_empty()
+                && matches!(
+                    scheme.to_ascii_lowercase().as_str(),
+                    "zed"
+                        | "vscode"
+                        | "vscode-insiders"
+                        | "idea"
+                        | "pycharm"
+                        | "clion"
+                        | "goland"
+                        | "rustrover"
+                        | "webstorm"
+                        | "phpstorm"
+                        | "rider"
+                        | "rubymine"
+                        | "datagrip"
+                        | "jetbrains"
+                )
+        });
+        if !allowed
+            || url.chars().any(|ch| {
+                ch.is_whitespace()
+                    || ch.is_control()
+                    || matches!(ch, '\'' | '"' | '<' | '>' | '\\' | '`')
+            })
+        {
+            bail!(
+                "invalid ide URL: use a supported editor scheme (e.g. zed: or vscode:) and percent-encode whitespace, controls, quotes, and delimiters"
+            );
+        }
+    }
+    Ok(CodeFenceInfo {
+        language,
+        reference,
+        ide_url,
+    })
+}
+
 pub fn resolve_code_references(source: &str) -> Result<String> {
     resolve_code_references_from(source, Path::new("examples"))
 }
@@ -145,27 +248,18 @@ fn resolve_code_references_from(source: &str, presentation_root: &Path) -> Resul
             index += 1;
             continue;
         };
-        let mut tokens = info.split_whitespace();
-        let Some(language) = tokens.next() else {
+        let info = parse_code_fence_info(info)?;
+        let Some(reference) = info.reference else {
             regular_fence = Some(fence);
             output.push_str(line);
             index += 1;
             continue;
         };
-        let Some(reference) = tokens.next().filter(|token| token.starts_with("code/")) else {
-            regular_fence = Some(fence);
-            output.push_str(line);
-            index += 1;
-            continue;
-        };
-        if tokens.next().is_some() {
-            bail!("a code reference fence accepts only a language and code path");
-        }
 
         let indentation = line.len() - line.trim_start().len();
         output.push_str(&line[..indentation]);
         output.extend(std::iter::repeat_n(char::from(fence.marker), fence.length));
-        output.push_str(language);
+        output.push_str(&info.resolved_info());
         output.push('\n');
 
         index += 1;
@@ -269,7 +363,7 @@ fn parse_slide(source: &str, slide_index: usize) -> Result<Slide> {
         bail!("slide content contains a reserved iframe marker");
     }
     let extracted = extract_directives(&source)?;
-    let mut html = render_markdown(&extracted.markdown);
+    let mut html = render_markdown(&extracted.markdown)?;
     for (iframe_index, iframe) in extracted.iframes.iter().enumerate() {
         let marker = format!("<p>{}</p>\n", iframe_marker(iframe_index));
         if !html.contains(&marker) {
@@ -289,7 +383,10 @@ fn parse_slide(source: &str, slide_index: usize) -> Result<Slide> {
     Ok(Slide {
         html,
         interaction: extracted.interaction,
-        notes: extracted.notes.map(|notes| render_markdown(&notes)),
+        notes: extracted
+            .notes
+            .map(|notes| render_markdown(&notes))
+            .transpose()?,
         iframe_assets,
     })
 }
@@ -669,7 +766,7 @@ fn parse_arguments(
     Ok(arguments)
 }
 
-fn render_markdown(source: &str) -> String {
+fn render_markdown(source: &str) -> Result<String> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -677,33 +774,34 @@ fn render_markdown(source: &str) -> String {
 
     let parser = Parser::new_ext(source, options);
     let mut rendered_events = Vec::new();
-    let mut code_block: Option<(String, String)> = None;
+    let mut code_block: Option<(String, Option<String>, String)> = None;
 
     for event in parser {
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
-                let language = match kind {
+                let (language, ide_url) = match kind {
                     CodeBlockKind::Fenced(value) => {
-                        value.split_whitespace().next().unwrap_or("").to_owned()
+                        let info = parse_code_fence_info(&value)?;
+                        (info.language.to_owned(), info.ide_url.map(str::to_owned))
                     }
-                    CodeBlockKind::Indented => String::new(),
+                    CodeBlockKind::Indented => (String::new(), None),
                 };
-                code_block = Some((language, String::new()));
+                code_block = Some((language, ide_url, String::new()));
             }
             Event::End(TagEnd::CodeBlock) => {
-                if let Some((language, code)) = code_block.take() {
+                if let Some((language, ide_url, code)) = code_block.take() {
                     rendered_events.push(Event::Html(CowStr::Boxed(
-                        render_code_block(&language, &code).into_boxed_str(),
+                        render_code_block(&language, &code, ide_url.as_deref()).into_boxed_str(),
                     )));
                 }
             }
             Event::Text(text) if code_block.is_some() => {
-                if let Some((_, code)) = code_block.as_mut() {
+                if let Some((_, _, code)) = code_block.as_mut() {
                     code.push_str(&text);
                 }
             }
             Event::SoftBreak | Event::HardBreak if code_block.is_some() => {
-                if let Some((_, code)) = code_block.as_mut() {
+                if let Some((_, _, code)) = code_block.as_mut() {
                     code.push('\n');
                 }
             }
@@ -756,7 +854,7 @@ fn render_markdown(source: &str) -> String {
 
     let mut output = String::new();
     html::push_html(&mut output, rendered_events.into_iter());
-    output
+    Ok(output)
 }
 
 fn is_external_destination(destination: &str) -> bool {
@@ -794,7 +892,7 @@ fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
     }
 }
 
-fn render_code_block(language: &str, code: &str) -> String {
+fn render_code_block(language: &str, code: &str, ide_url: Option<&str>) -> String {
     if language.trim().eq_ignore_ascii_case("mermaid") {
         return format!(
             "<figure class=\"mermaid-diagram\" data-mermaid-diagram><pre class=\"mermaid-source\" data-mermaid-source><code>{}</code></pre><div class=\"mermaid-output\" data-mermaid-output hidden></div><p class=\"mermaid-error\" data-mermaid-error role=\"status\" hidden>Could not render this diagram. Check the Mermaid syntax.</p></figure>",
@@ -802,11 +900,15 @@ fn render_code_block(language: &str, code: &str) -> String {
         );
     }
 
-    highlight_code(language, code)
+    highlight_code_with_ide(language, code, ide_url)
 }
 
 /// Render a syntax-highlighted HTML code block using the bundled theme.
 pub fn highlight_code(language: &str, code: &str) -> String {
+    highlight_code_with_ide(language, code, None)
+}
+
+fn highlight_code_with_ide(language: &str, code: &str, ide_url: Option<&str>) -> String {
     static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
     static THEME: OnceLock<Theme> = OnceLock::new();
 
@@ -821,8 +923,18 @@ pub fn highlight_code(language: &str, code: &str) -> String {
 
     let highlighted = highlighted_html_for_string(code, syntaxes, syntax, theme)
         .unwrap_or_else(|_| format!("<pre><code>{}</code></pre>", html_escape::encode_text(code)));
+    let ide_attribute = ide_url
+        .map(|url| {
+            format!(
+                " data-code-ide-url=\"{}\"",
+                html_escape::encode_double_quoted_attribute(url)
+            )
+        })
+        .unwrap_or_default();
     if matches!(language.trim().to_ascii_lowercase().as_str(), "rust" | "rs") {
-        format!("<div class=\"rust-code\" data-rust-code>{highlighted}</div>")
+        format!("<div class=\"rust-code\" data-rust-code{ide_attribute}>{highlighted}</div>")
+    } else if ide_url.is_some() {
+        format!("<div class=\"rust-code\"{ide_attribute}>{highlighted}</div>")
     } else {
         highlighted
     }
@@ -831,6 +943,127 @@ pub fn highlight_code(language: &str, code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ide_metadata_renders_only_on_the_wrapper() {
+        let url = "ZeD://file/tmp/a%20b.rs?line=12&column=3#symbol%22";
+        for language in ["rust", "rs", "python"] {
+            let source = format!("```{language} ide=\"{url}\"\nhello\n```");
+            let html = &parse_deck(&source).unwrap().slides[0].html;
+            assert!(html.contains("class=\"rust-code\""));
+            assert_eq!(html.contains("data-rust-code"), language != "python");
+            assert!(html.contains(
+                "data-code-ide-url=\"ZeD://file/tmp/a%20b.rs?line=12&amp;column=3#symbol%22\""
+            ));
+            let pre = &html[html.find("<pre").unwrap()..html.find("</pre>").unwrap()];
+            assert!(!pre.contains("ide="));
+            assert!(!pre.contains(url));
+            assert!(pre.contains("hello"));
+        }
+        for language in ["rust", "python", "mermaid"] {
+            let source = format!("```{language}\nhello\n```");
+            let html = &parse_deck(&source).unwrap().slides[0].html;
+            assert!(!html.contains("data-code-ide-url"));
+            assert_eq!(html.contains("rust-code"), language == "rust");
+        }
+        assert_eq!(
+            parse_code_fence_info("rust unrelated info")
+                .unwrap()
+                .language,
+            "rust"
+        );
+    }
+
+    #[test]
+    fn ide_metadata_allows_only_editor_schemes() {
+        for scheme in [
+            "zed",
+            "vscode",
+            "vscode-insiders",
+            "idea",
+            "pycharm",
+            "clion",
+            "goland",
+            "rustrover",
+            "webstorm",
+            "phpstorm",
+            "rider",
+            "rubymine",
+            "datagrip",
+            "jetbrains",
+        ] {
+            let info = format!(
+                "rust ide=\"{}://file/a%20b?line=1#main\"",
+                scheme.to_uppercase()
+            );
+            assert!(parse_code_fence_info(&info).is_ok(), "{info}");
+        }
+        for url in [
+            "javascript:alert(1)",
+            "data:text/html,test",
+            "file:///tmp/a",
+            "unknown:a",
+            "https://example.com",
+            "",
+            "zed:",
+            "zed://a b",
+            "zed://a\tb",
+            "zed://a\u{7f}",
+            "zed://a\0",
+            "zed://a\"b",
+            "zed://a'b",
+            "zed://a<b",
+            "zed://a>b",
+            "zed://a\\b",
+            "zed://a`b",
+        ] {
+            let info = format!("rust ide=\"{url}\"");
+            assert!(parse_code_fence_info(&info).is_err(), "{info:?}");
+            assert!(
+                parse_deck(&format!("```{info}\nhello\n```")).is_err(),
+                "{info:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ide_metadata_rejects_malformed_duplicate_and_mermaid_attributes() {
+        for info in [
+            "rust ide",
+            "rust ide=zed://file/a",
+            "rust ide='zed://file/a'",
+            "rust ide=\"zed://file/a",
+            "rust ide = \"zed://file/a\"",
+            "rust ide=\"zed://file/a\"junk",
+            "rust ide=\"zed://a\" ide=\"vscode://b\"",
+            "rust code/a.rs ide=\"zed://a\" ide=\"zed://b\"",
+            "mermaid ide=\"zed://a\"",
+            "MERMAID code/a.rs ide=\"zed://a\"",
+            "ide=\"zed://a\"",
+        ] {
+            let error = parse_deck(&format!("```{info}\n```")).unwrap_err();
+            assert!(
+                format!("{error:#}").to_lowercase().contains("ide"),
+                "{info}: {error:#}"
+            );
+        }
+        assert!(parse_deck("> ```rust ide=\"javascript:bad\"\n> hello\n> ```").is_err());
+    }
+
+    #[test]
+    fn legacy_code_references_preserve_ide_metadata() {
+        let source = "```python code/word-count/python/step_01.py ide=\"vscode://file/a%20b?line=2&column=1#main\"\n```";
+        let resolved = resolve_code_references(source).unwrap();
+        assert!(
+            resolved.starts_with("```python ide=\"vscode://file/a%20b?line=2&column=1#main\"\n")
+        );
+        assert!(!resolved.contains("code/word-count"));
+        let html = &parse_deck(source).unwrap().slides[0].html;
+        assert!(html.contains("data-code-ide-url="));
+        assert!(!html.contains("data-rust-code"));
+        assert!(html.contains("count_words"));
+        assert_eq!(*html, parse_deck(&resolved).unwrap().slides[0].html);
+    }
 
     #[test]
     fn renders_mermaid_blocks_as_safe_client_side_diagrams() {

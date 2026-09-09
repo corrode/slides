@@ -130,6 +130,21 @@ Code shipped in the bundle's `code/` directory can be included in full with an o
 
 Bundle uploads resolve the whole UTF-8 file into the draft; line ranges and snippets are not supported. Existing legacy decks still resolve paths under `examples/code/`, with contents snapshotted on publication.
 
+Code fences also accept one optional trailing `ide="URL"` attribute, for inline code or an otherwise empty include:
+
+````markdown
+```rust ide="zed://file/..."
+fn main() {}
+```
+
+```rust code/example.rs ide="zed://file/..."
+```
+````
+
+These abbreviated URLs illustrate syntax; use user-supplied URLs and paths in actual decks. Metadata survives include expansion. A native **Open in IDE** link icon appears beside **Copy** on hover or keyboard focus and remains visible on touch devices, with an accessible label. **Run** remains Rust-only (`rust`/`rs`). Opening requires a click and the viewer's installed URL handler; Slides never launches automatically, fetches the IDE URL, or checks its target file.
+
+Use double quotes and percent-encode spaces (`%20`); malformed attributes and unsafe schemes are rejected. Allowed schemes (case-insensitive): `zed`, `vscode`, `vscode-insiders`, `idea`, `pycharm`, `clion`, `goland`, `rustrover`, `webstorm`, `phpstorm`, `rider`, `rubymine`, `datagrip`, `jetbrains`. No `ide` on Mermaid fences. This does not broaden ordinary Markdown links: their schemes remain HTTP(S), `mailto:`, and `zed:` only, alongside local references and fragments. See [IDE link syntax and validation](docs/slide-format.md#code-fence-ide-links).
+
 Fenced `mermaid` blocks render diagrams in previews, live sessions, print/PDF output, and offline archives:
 
 ````markdown

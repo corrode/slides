@@ -796,7 +796,7 @@
 
   function initializeRustPlaygrounds(root = document) {
     if (document.body.matches("[data-print-deck]")) return;
-    root.querySelectorAll("[data-rust-code]:not([data-playground-ready])").forEach((block) => {
+    root.querySelectorAll(":is([data-rust-code], .rust-code[data-code-ide-url]):not([data-playground-ready])").forEach((block) => {
       block.dataset.playgroundReady = "true";
 
       const toolbar = document.createElement("div");
@@ -812,6 +812,29 @@
       copyButton.setAttribute("aria-label", "Copy code");
       copyButton.innerHTML = '<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1"/></svg>';
 
+      toolbar.append(copyButton);
+
+      const ideUrl = block.dataset.codeIdeUrl;
+      if (ideUrl) {
+        const ideLink = document.createElement("a");
+        ideLink.className = "button secondary icon-only";
+        // The renderer validates this URL before emitting the metadata.
+        ideLink.href = ideUrl;
+        ideLink.title = "Open in IDE";
+        ideLink.setAttribute("aria-label", "Open in IDE");
+        ideLink.innerHTML = '<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 .5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>';
+        toolbar.append(ideLink);
+      }
+
+      const copyStatus = document.createElement("span");
+      copyStatus.className = "visually-hidden";
+      copyStatus.dataset.playgroundCopyStatus = "";
+      copyStatus.setAttribute("role", "status");
+      copyStatus.setAttribute("aria-live", "polite");
+      block.prepend(toolbar, copyStatus);
+
+      if (!block.hasAttribute("data-rust-code")) return;
+
       const runButton = document.createElement("button");
       runButton.type = "button";
       runButton.className = "secondary icon-only";
@@ -819,13 +842,7 @@
       runButton.title = "Run code on play.rust-lang.org";
       runButton.setAttribute("aria-label", "Run code on play.rust-lang.org");
       runButton.innerHTML = '<svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg>';
-      toolbar.append(copyButton, runButton);
-
-      const copyStatus = document.createElement("span");
-      copyStatus.className = "visually-hidden";
-      copyStatus.dataset.playgroundCopyStatus = "";
-      copyStatus.setAttribute("role", "status");
-      copyStatus.setAttribute("aria-live", "polite");
+      toolbar.append(runButton);
 
       const result = document.createElement("div");
       result.className = "playground-result";
@@ -843,21 +860,20 @@
       output.setAttribute("aria-label", "Program output");
       result.append(status, output);
 
-      block.prepend(toolbar, copyStatus);
       block.append(result);
     });
   }
 
-  function rustCodeSource(button) {
+  function codeSource(button) {
     return button
-      .closest("[data-rust-code]")
+      .closest("[data-playground-ready]")
       ?.querySelector(":scope > pre:not([data-playground-output])")?.textContent;
   }
 
-  async function copyRustCode(button) {
-    const source = rustCodeSource(button);
+  async function copyCode(button) {
+    const source = codeSource(button);
     const status = button
-      .closest("[data-rust-code]")
+      .closest("[data-playground-ready]")
       ?.querySelector("[data-playground-copy-status]");
     if (source == null || !status) return;
 
@@ -907,7 +923,7 @@
 
   async function runRustCode(button) {
     const block = button.closest("[data-rust-code]");
-    const source = rustCodeSource(button);
+    const source = codeSource(button);
     const result = block?.querySelector("[data-playground-result]");
     const status = block?.querySelector("[data-playground-status]");
     const output = block?.querySelector("[data-playground-output]");
@@ -1155,7 +1171,7 @@
     }
     const playgroundCopy = event.target.closest("[data-playground-copy]");
     if (playgroundCopy) {
-      copyRustCode(playgroundCopy);
+      copyCode(playgroundCopy);
       return;
     }
     const playgroundRun = event.target.closest("[data-playground-run]");

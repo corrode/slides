@@ -73,9 +73,24 @@ Use inline fenced code for short examples. Put reusable or longer examples in re
 ```
 ````
 
-Includes expand the whole file at upload. Do not use line ranges, regions, placeholders, or extra fence arguments. Use a longer fence if included content could close it.
+Includes expand the whole file at upload. Do not use line ranges, regions, placeholders, or extra fence arguments other than one trailing `ide="URL"` attribute. Use a longer fence if included content could close it.
 
-Test examples when practical. Rust blocks can offer an explicit Run action backed by the public Rust Playground; do not include secrets or send confidential code there without authorization. Uploading a bundle itself never executes its code.
+Optional IDE links work with inline code and includes:
+
+````markdown
+```rust ide="zed://file/..."
+fn main() {}
+```
+
+```rust code/example.rs ide="zed://file/..."
+```
+````
+
+These abbreviated URLs illustrate syntax only: use user-supplied editor URLs and paths in actual decks. If none is supplied, omit `ide` rather than inventing a destination. Metadata survives includes and is not displayed or copied as code. The native **Open in IDE** link icon sits beside **Copy**, appears on hover or keyboard focus, stays visible on touch devices, and has an accessible label. Opening is explicit, requires the viewer's installed URL handler, and may prompt for permission; Slides never launches automatically, fetches the IDE URL, or checks its target file. Bundle code includes still must exist.
+
+Use exactly one lowercase `ide` attribute, double-quoted, after the language and optional include path; percent-encode spaces as `%20`. Raw whitespace, controls, quotes, backslashes, backticks, and angle brackets are rejected, as are malformed/duplicate attributes and other arguments alongside IDE metadata. Allowed schemes (case-insensitive): `zed`, `vscode`, `vscode-insiders`, `idea`, `pycharm`, `clion`, `goland`, `rustrover`, `webstorm`, `phpstorm`, `rider`, `rubymine`, `datagrip`, `jetbrains`. Other schemes are rejected. No `ide` on `mermaid` fences. This allowlist is only for code fence metadata; ordinary Markdown link schemes remain HTTP(S), `mailto:`, and `zed:`.
+
+Test examples when practical. Only Rust blocks (`rust`/`rs`) can offer an explicit Run action backed by the public Rust Playground; do not include secrets or send confidential code there without authorization. Uploading a bundle itself never executes its code.
 
 ### Images, diagrams, and HTML
 

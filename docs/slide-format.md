@@ -97,9 +97,30 @@ Executable examples live under `code/` in the ZIP and are referenced as the seco
 ```
 ````
 
-The first token selects syntax highlighting. The second is a path relative to the ZIP root and must start with `code/`. Uploading includes the **whole UTF-8 file** as ordinary inline code; there are no line ranges, snippet selectors, or extra fence arguments. Missing files, unsafe paths, non-UTF-8 content, and fences that also contain inline code are rejected. If the referenced file contains a line that would close the fence, use a longer fence or the other fence marker.
+The first token selects syntax highlighting. The second is a path relative to the ZIP root and must start with `code/`. Uploading includes the **whole UTF-8 file** as ordinary inline code; there are no line ranges or snippet selectors. The only supported extra argument is one trailing `ide="URL"` attribute, preserved when the include expands. Missing files, unsafe paths, non-UTF-8 content, and fences that also contain inline code are rejected. If the referenced file contains a line that would close the fence, use a longer fence or the other fence marker.
 
 For existing legacy decks and repository CLI validation only, paths resolve relative to `examples/`, under `examples/code/`. Legacy draft previews read the current file; publication snapshots its contents. Bundle previews instead use the code resolved at upload time.
+
+### Code fence IDE links
+
+Inline code and otherwise empty include fences accept `language [code/path] [ide="URL"]`:
+
+````markdown
+```rust ide="zed://file/..."
+fn main() {}
+```
+
+```rust code/example.rs ide="zed://file/..."
+```
+````
+
+The abbreviated URLs above illustrate syntax only. Use user-supplied editor URLs and paths in actual decks, not invented local destinations. IDE metadata survives code-include expansion and does not become part of the displayed or copied code.
+
+- Use exactly one lowercase `ide` attribute after the language and optional include path. Double quotes are required; percent-encode spaces as `%20`. Raw whitespace, control characters, quotes, backslashes, backticks, and angle brackets are rejected. Duplicate or malformed attributes and additional arguments alongside IDE metadata are rejected.
+- Allowed URL schemes are `zed`, `vscode`, `vscode-insiders`, `idea`, `pycharm`, `clion`, `goland`, `rustrover`, `webstorm`, `phpstorm`, `rider`, `rubymine`, `datagrip`, and `jetbrains` (case-insensitive). A nonempty destination after `:` is required. Other schemes, including `javascript:`, `data:`, `file:`, and HTTP(S), are rejected here.
+- On interactive pages, an **Open in IDE** link icon appears beside **Copy** on code hover or keyboard focus and stays visible on touch devices. It is a native link with an accessible label. **Run** remains exclusive to `rust` and `rs` blocks; other code languages can have IDE links without execution controls.
+- Opening requires an explicit user action and an installed URL handler on the viewer's machine; the browser may ask permission. Slides never launches the IDE automatically, fetches its URL, or checks whether its target file exists. The separate `code/` include still must exist.
+- `mermaid` fences do not support `ide`. This editor-scheme allowlist applies only to code fence metadata, not ordinary Markdown links, which still allow only HTTP(S), `mailto:`, and `zed:` schemes (plus local references and fragments).
 
 ### Mermaid diagrams
 
