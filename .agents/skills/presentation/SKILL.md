@@ -1,222 +1,144 @@
 ---
 name: presentation
-description: Create or revise complete, bundle-ready presentation decks for this Slides app. Use when the user asks for a presentation, talk, workshop, lesson, pitch, or slide deck. Produces valid Slides Markdown v1 with slide separators, optional presenter notes, and supported audience interactions.
+description: Create or revise a presentation for this Slides app as a complete ZIP bundle containing slides.md and its code, images, and HTML demos. Use for talks, workshops, lessons, pitches, and slide decks, including packaging or uploading a presentation draft.
 ---
 
-# Create a Slides presentation
+# Create a presentation bundle
 
-Create a coherent presentation in the Markdown format accepted by this repository. The final document must be ready to save as root `slides.md` in a presentation ZIP. Bundle decks are read-only in the browser; users can preview, publish, present, and print them. Existing legacy decks retain browser editing only as a migration bridge.
+Deliver an editable source directory and an upload-ready ZIP for one presentation. Markdown is the entry point, not the entire deliverable. A Markdown-only presentation is still a bundle containing `slides.md`.
 
-## Understand the request
+When working in the Slides repository, use `docs/slide-format.md` as the syntax reference. Outside that repository, use `references/slide-format.md` relative to this skill's directory; the global installation includes a snapshot. References below to `docs/slide-format.md` mean whichever copy applies. If neither is available, obtain the reference from the user rather than guessing. Read its bundle rules and the sections relevant to the deck before authoring. Do not invent layout directives, metadata fields, API endpoints, or validation commands.
 
-Use any topic, source material, audience, goal, tone, duration, and constraints supplied by the user. Ask concise clarifying questions before drafting only when missing information would materially change the deck, especially the topic, audience, or desired outcome. Otherwise make reasonable choices and proceed.
+## 1. Establish the task
 
-When revising an existing deck, return the complete revised document rather than a diff or a list of suggestions.
+Use the supplied audience, topic, source material, duration, and desired outcome. Ask only for missing information that would materially change the presentation. Otherwise choose reasonable defaults and proceed.
 
-## Design the deck
+Distinguish the requested action:
 
-- Build a clear narrative: establish the problem or promise, develop the core ideas, and end with a useful conclusion or call to action.
-- Give each slide one main purpose.
-- Prefer short titles, concrete language, and scannable content over paragraphs.
-- Use examples, comparisons, diagrams expressed as text, tables, or code only when they advance the story.
-- Size the deck to the requested duration. As a default, allow roughly one to two minutes per substantive slide.
-- Add presenter notes for delivery cues, transitions, supporting detail, timing, or facts that should not appear to the audience.
-- Use audience interactions deliberately. Do not add a poll, quiz, word cloud, or ordering exercise merely to demonstrate the feature.
-- Do not invent facts, quotations, metrics, or sources. Use Markdown links for citations when sources matter.
+- **Create or revise:** write local source files and build a ZIP. No network upload.
+- **Upload:** create or replace a server draft using the bundle API.
+- **Publish or present:** upload if authorized, then explain the separate presenter-UI action. The bundle API does not publish or start a session.
 
-## Follow Slides Markdown v1 exactly
+Saving files locally does not authorize uploading. Do not deploy the application, modify CI, or change server configuration as part of making a deck.
 
-The normative project reference is `docs/slide-format.md`. Consult it if any syntax is uncertain.
+For revisions, preserve the existing bundle's files and authoring paths. Change the requested content, then rebuild the complete archive. Do not return a patch as the presentation or upload only the changed files. The API's `source` field contains resolved Markdown, not a recoverable copy of the original multi-file bundle; prefer the local authoring directory or original ZIP.
 
-### Document and slide boundaries
+## 2. Plan the presentation
 
-- Output UTF-8 Markdown with one or more non-empty slides. Begin with a nonempty H1 title of at most 120 characters; the first H1 supplies the bundle's presentation title. There is no manifest.
-- Separate slides with a line whose trimmed content is exactly `---`.
-- Do not place `---` before the first slide or after the final slide.
-- Do not add YAML front matter. A leading `---` is interpreted as an empty slide separator, not metadata.
-- Use ordinary CommonMark. Tables, strikethrough, task lists, and fenced code blocks are supported.
-- Raw HTML is displayed as text and cannot be used for layout or behavior. Use the restricted local iframe directive only with real, trusted HTML included in the presentation ZIP.
-- Unsupported presentation features such as columns, incremental reveals, backgrounds, custom classes, or per-slide metadata do not exist. Do not invent syntax for them.
+- Give the audience a clear problem, explanation, and takeaway.
+- Give each slide one purpose. Prefer concrete examples and short text to paragraphs.
+- Budget roughly one to two minutes per substantive slide unless the format calls for another pace.
+- Put delivery cues and supporting detail in presenter notes, not audience-facing prose.
+- Use interactions when they help the audience learn or make a decision, not to demonstrate every feature.
+- Verify factual claims and cite sources where useful. Do not invent quotations, results, or metrics.
+- Keep diagrams and code readable at presentation distance. Do not add HTML demos when ordinary Markdown or Mermaid would be clearer.
 
-A basic deck has this shape:
+## 3. Write the source directory
 
-````markdown
-# Opening title
+Use the user's requested location or an appropriate project-local directory. Inspect the parent before creating files. Keep the ZIP outside the source directory so it cannot include itself. Do not overwrite another presentation or an existing archive without authorization.
 
-A concise promise or framing statement.
+Example layout; create only the supporting files the deck needs:
 
----
-
-# One idea per slide
-
-- Supporting point
-- Supporting point
-
----
-
-# Conclusion
-
-The takeaway the audience should remember.
-````
-
-### Presenter notes
-
-A slide may contain at most one presenter notes block. Put it after the visible slide content. Notes support Markdown and are hidden from the audience, previews, print output, and archives.
-
-```markdown
-:::notes
-Explain the transition to the next idea.
-
-- Pause for questions.
-- Spend no more than two minutes here.
-:::
+```text
+my-talk/
+  slides.md
+  code/example.rs
+  images/diagram.svg
+  demo/index.html
+  demo/app.js
+  demo/style.css
+my-talk.zip
 ```
 
-The opening `:::notes` line accepts no attributes or flags. Always close the block with a line containing exactly `:::`.
+The archive contains the **contents** of `my-talk/`, not the parent directory.
 
-### Interactions
+### Entry point and Markdown
 
-A slide may contain at most one interaction block. Attribute values must use double quotes. Do not use unsupported or duplicate attributes, and do not put double quotes inside an attribute value because v1 has no escape syntax. A notes block may appear on the same slide as an interaction.
-
-Polls require at least two top-level `- ` options. The optional `multiple` flag permits multiple selections. Orientation is `horizontal` by default and may be `vertical`.
-
-```markdown
-# Ask the room
-
-:::poll question="Which approach should we explore?" multiple orientation="horizontal"
-- First approach
-- Second approach
-- Third approach
-:::
-```
-
-Word clouds have no body. The prompt defaults to `What comes to mind?` and `max` defaults to 80 characters. Keep `max` between 1 and 240.
-
-```markdown
-# Collect first impressions
-
-:::wordcloud prompt="Describe this idea in one word" max="40"
-:::
-```
-
-Quizzes require at least two checkbox options and at least one correct answer. More than one answer may be correct.
-
-```markdown
-# Check understanding
-
-:::quiz question="Which statements are correct?"
-- [x] The correct statement
-- [ ] A plausible distractor
-- [ ] Another distractor
-:::
-```
-
-Ordering interactions require at least two top-level `- ` items. Write them in the intended correct or reference order.
-
-```markdown
-# Put the steps in order
-
-:::ordering prompt="Arrange the process from first to last"
-- First step
-- Second step
-- Third step
-:::
-```
-
-Always close every interaction with a line containing exactly `:::`.
-
-### Local HTML embeds
-
-Use a local iframe only with trusted, self-contained HTML included in the presentation ZIP. Both attributes are required, the body is empty, and the source is relative to the ZIP root:
-
-```markdown
-:::iframe src="demo/index.html" title="Interactive demo"
-:::
-```
-
-Never use an external iframe URL, absolute path, traversal, raw `<iframe>` HTML, or a missing file. Write a concise, meaningful title of at most 200 characters for assistive technology. HTML may run sandboxed JavaScript, but all scripts, styles, images, fonts, and other dependencies must be bundled and use relative URLs: no CDNs or external resources. Forms, popups, parent-page access, and network APIs such as `fetch` and WebSocket are blocked. A page can still navigate its own frame, so use only trusted content.
-
-Markdown images and local links also use existing paths relative to the ZIP root, such as `![Diagram](images/diagram.svg)` and `[Source](code/example.rs)`. External images are rejected, but ordinary navigation links may use HTTP(S), mailto, or fragments. The importer rewrites local references to immutable generation URLs; never fabricate those URLs. For an explicitly legacy deck only, retain existing `/assets/embeds/<bundle>/...` references rather than treating it as a new bundle.
-
-### Mermaid diagrams
-
-Use a fenced `mermaid` block when a diagram communicates structure, sequence, state, or flow more clearly than prose. Mermaid diagrams work in previews, live sessions, print/PDF output, and offline archives, and they do not count as slide interactions.
-
-Prefer simple, legible diagrams with short labels. Favor top-to-bottom layouts such as `flowchart TD` when a left-to-right diagram would become too wide for a 16:9 slide. Common useful forms include `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `timeline`, `mindmap`, `pie`, and `gantt`.
-
-Add `accTitle` and `accDescr` declarations so the generated SVG is understandable to assistive technology:
-
-````markdown
-# From draft to delivery
-
-```mermaid
-flowchart TD
-    accTitle: Presentation publishing workflow
-    accDescr: A draft is reviewed, published, and delivered to the audience.
-    Draft --> Review --> Publish --> Present
-```
-````
-
-Do not use Mermaid initialization directives, custom scripts, click callbacks, raw HTML, or unverified external resources. The app renders diagrams in strict security mode. Keep each diagram small enough to read at presentation distance.
+- Require the exact root filename `slides.md`, encoded as UTF-8.
+- Begin with a nonempty H1 of at most 120 characters. Its text supplies the presentation title.
+- Use `---` on its own line between slides. Do not add leading or trailing separators.
+- No frontmatter, `bundle.json`, theme metadata, or multi-file deck composition. Additional Markdown files are supporting material, not automatically included slides.
+- Use CommonMark with tables, strikethrough, task lists, and fenced code. Raw HTML in Markdown is not a layout mechanism.
+- Do not invent columns, reveal markers, slide classes, or background directives. New bundles use the app's default theme; replacement preserves an existing deck's theme.
+- Use at most one `:::notes` block and one interaction per slide. Close directive blocks with `:::` and consult the format reference for exact attributes.
+- Polls and ordering exercises need at least two items. Quizzes need at least two options and one marked correct answer. Word clouds have no body. Attribute values use double quotes, with no embedded quote escaping.
+- Keep reference-style link definitions on the slide using them; reference labels are slide-local.
 
 ### Code
 
-Use ordinary fenced code blocks with a language identifier. Inline generated code is safest and makes the deck portable.
+Use inline fenced code for short examples. Put reusable or longer examples in real UTF-8 files under `code/`, included through an otherwise empty fence:
 
 ````markdown
-```rust
-fn main() {
-    println!("Hello, slides!");
-}
+```rust code/example.rs
 ```
 ````
 
-Interactive views add a Run control to `rust` and `rs` blocks. Make runnable examples complete and safe when execution is part of the presentation.
+Includes expand the whole file at upload. Do not use line ranges, regions, placeholders, or extra fence arguments. Use a longer fence if included content could close it.
 
-Only reference a real UTF-8 file included under `code/` in the ZIP. The fence must otherwise be empty, the path is relative to the ZIP root, and inline code cannot appear in the same fence:
+Test examples when practical. Rust blocks can offer an explicit Run action backed by the public Rust Playground; do not include secrets or send confidential code there without authorization. Uploading a bundle itself never executes its code.
 
-````markdown
-```python code/example/script.py
+### Images, diagrams, and HTML
+
+Reference existing bundle-relative paths:
+
+```markdown
+![Diagram description](images/diagram.svg)
+
+[Example source](code/example.rs)
+
+:::iframe src="demo/index.html" title="Interactive demonstration"
+:::
 ```
-````
 
-Includes expand the whole file at upload time; line ranges, snippet selectors, and extra fence arguments are unsupported. Do not fabricate referenced paths. Use a longer fence if the file contains a matching closing fence. Existing legacy decks and repository CLI validation resolve code paths under `examples/code/` instead.
+- No external images or iframe URLs. Ordinary navigation links may use HTTP(S), mailto, or fragments.
+- Do not author `/assets/...` paths or fabricate generation URLs; the importer creates those. Do not link to `slides.md`, which is private source and may contain notes.
+- Prefer a small fenced `mermaid` diagram when appropriate. Include accessibility text using `accTitle` and `accDescr` where supported; avoid custom scripts, initialization directives, and raw HTML.
+- HTML demos must be self-contained and trusted. Bundle their JavaScript, CSS, images, and fonts; resolve dependencies relative to the HTML/CSS file. No CDN dependencies, external fetches, or build/install steps on the server.
+- HTML runs in a sandbox without parent-page access, same-origin privileges, forms, popups, or fetch/WebSocket connections. Do not weaken that sandbox to make a demo work. A frame can navigate itself; sandboxing is not proof that arbitrary content is safe.
+- Presenter notes are excluded from audience rendering. Do not put private material in supporting files: assets can be served or included in audience archives.
 
-## Check the result
+## 4. Package and check
 
-Before responding, verify all of the following:
+Create a **fresh** ZIP with Stored or Deflated entries, using explicit source paths. For example, from the verified source directory:
 
-- Every `---` separator is outside code and directive fences.
-- Every code, notes, and interaction fence is closed.
-- No slide contains more than one interaction or more than one notes block.
-- Polls and ordering blocks have at least two valid items.
-- Quizzes have at least two valid options and at least one `[x]` answer.
-- Word-cloud blocks have no body.
-- Every Mermaid block starts with a supported diagram type, uses concise labels, and includes accessibility text.
-- Interaction names and attributes exactly match the supported syntax.
-- The first slide begins with a nonempty H1 title of at most 120 characters, not metadata or a separator.
-- All referenced local files exist in the ZIP; `slides.md` is at its root, without a wrapper parent.
-- Paths and file extensions satisfy the bundle rules in `docs/slide-format.md`; HTML dependencies are bundled, not remote.
-- The deck ends with slide content, not a trailing separator.
+```sh
+python3 -m zipfile -c ../my-talk.zip slides.md code images demo
+```
 
-## Uploading to a Slides server
+Replace names with the actual paths and omit nonexistent directories. For a Markdown-only deck, include just `slides.md`. Never recursively archive the whole repository or include `.git`, credentials, dependencies, build output, editor debris, or another archive.
 
-Only upload when the user explicitly asks you to upload, publish, or save the deck. Creating or revising a deck alone does not permit a network request.
+Before handing off or uploading, inspect the actual ZIP, not just the source tree:
 
-- Prefer the conventional `SLIDES_URL` and `SLIDES_API_TOKEN` environment variables, or values supplied in the conversation. If the server URL is unavailable, ask for it. If no token exists, direct the user to `<server-url>/admin/settings`; its plaintext value is shown only once.
-- Treat the token as a secret. Send it only as `Authorization: Bearer <token>` and never echo it in responses, command output, URLs, source, or logs.
-- Find an existing draft with `GET /api/v1/presentations` or `GET /api/v1/presentations/{slug}`. Choose the target slug explicitly; do not replace a different deck without authorization.
-- Create or replace with `POST /api/v1/presentations/{slug}/bundle`, sending a raw ZIP body and `Content-Type: application/zip`, not JSON or multipart. Expect `201 Created` for creation and `200 OK` for replacement. There are no separate title, source, or theme request fields.
-- Include the complete UTF-8 document as root `slides.md` and every dependency in the same ZIP, without a wrapper parent or manifest. The first H1 supplies the title; keep it nonempty and at most 120 characters.
-- Limits: 20 MiB ZIP, 100 MiB extracted, 512 entries including directories, 2 MiB `slides.md`, and 4 MiB per HTML file. Use Stored or Deflated ZIP entries, supported file extensions, and safe ASCII paths. No symlinks, encryption, duplicates, or traversal. Consult `docs/slide-format.md` for precise validation rules.
-- Build a fresh ZIP from the directory containing `slides.md`: `python3 -m zipfile -c presentation.zip slides.md`. For sibling asset directories that exist, append `code images demo`. If `zip` is available, `zip -r presentation.zip slides.md code images demo` is an alternative. Do not ZIP their parent directory. The README has a complete curl example.
-- Every upload creates an immutable asset generation and replaces only the draft. Published versions and their assets never change on replacement. Publishing and starting sessions remain presenter UI actions; uploading alone does neither.
-- Use the response's `slug` for the shortlink. The `Location` header identifies the API resource; `<server-url>/<slug>` is the named shortlink and waiting page, not proof of publication. Bundle decks are read-only in the browser; subsequent changes require a complete replacement ZIP.
-- Handle non-success responses without exposing credentials. Report only the server's safe error message and the action needed.
-- After a successful draft upload, return a concise confirmation with the shortlink and note that publishing or presenting must be done in the presenter UI. Do not print the raw Markdown unless the user asks for both.
+- Exact root `slides.md`; no wrapper directory or manifest.
+- At most **20 MiB compressed**, **100 MiB extracted**, and **512 entries**, counting directories. Root Markdown at most **2 MiB**; each HTML file at most **4 MiB**.
+- Use the extension allowlist in `docs/slide-format.md`. Path segments contain only ASCII letters, digits, dots, hyphens, and underscores. No spaces, trailing dots, absolute paths, traversal, or backslashes.
+- No symlinks, special files, encryption, duplicate paths, case-only collisions, or file/directory collisions.
+- Every explicit local image, link, iframe, and code reference exists. Check static HTML/CSS dependencies too; exercise interactive demos where possible.
+- All fences close; slide separators are outside code blocks. Interactions satisfy their semantic rules.
+- List the archive entries, check CRCs, and calculate compressed/extracted sizes. Confirm the source directory remains usable for the next revision.
 
-## Output contract
+Be precise about validation. `slides validate <FILE>` is a Markdown CLI, **not a bundle validator**. It uses legacy code-reference and iframe-path handling, so bundle-relative source can fail there even when valid for upload. Do not change correct authoring paths to satisfy it, and do not claim a CLI pass validates the archive. There is currently no bundle dry-run endpoint or dedicated ZIP validation command. The upload handler performs authoritative bundle validation before accepting a draft.
 
-Unless this is an explicit upload request, return only the complete raw Slides Markdown document. Do not introduce it, explain it, summarize it, wrap it in a Markdown code fence, or append commentary. The first character of the response must belong to the first slide. This output rule applies even when the user asks for a revision.
+If a local preview is available, check slide density, code readability, diagrams, and HTML behavior. Otherwise state that visual validation was not performed.
 
-For an explicit upload request, upload the draft instead. On success, return only a concise confirmation, the shortlink, and the required presenter-UI publication step rather than the raw Markdown.
+## 5. Upload only when requested
+
+Use the server URL and API token supplied by the user or available through the established secret mechanism. Conventional client variables are `SLIDES_URL` and `SLIDES_API_TOKEN`. Never print token values, put them in files or URLs, or expose them through shell tracing. If unavailable, ask for the server location or direct the user to `/admin/settings` to create an API token.
+
+The API bearer token is separate from `ADMIN_PASSWORD`, which is for presenter login. Do not use the password as a bearer token or change authentication settings.
+
+1. Choose a slug with the user’s intent. Slugs use 1–48 lowercase ASCII letters, digits, or hyphens, without leading/trailing hyphens; reserved routes are rejected. Check for an existing presentation before a new upload. Ask before replacing an unrelated deck.
+2. Send `POST /api/v1/presentations/{slug}/bundle` with `Authorization: Bearer <token>`, `Content-Type: application/zip`, and the ZIP as the raw body. No JSON payload, multipart form, separate embed upload, or PATCH request.
+3. Expect `201 Created` for creation or `200 OK` for replacement. Read the response rather than assuming success. `413` indicates size limits, `415` a content-type error, and `422` invalid bundle contents. Correct the underlying files/archive before retrying; never suppress validation failures.
+4. A successful upload replaces only the draft and installs immutable assets. Published versions and running sessions retain their previous contents. Further edits require another complete bundle upload.
+5. Provide `<server>/admin/decks/<slug>/edit` for authenticated preview and publishing. `<server>/<slug>` is the audience shortlink, not evidence that the new draft is published. The `Location` header points to the API resource, not the presenter UI.
+
+If the user asks to publish, explain that they must choose Publish in the presenter UI; do not report an upload as publication. Never generate or rotate credentials automatically.
+
+## Deliver the result
+
+Default to a short handoff with clickable paths to the **source directory**, **`slides.md`**, and **ZIP**, plus the checks actually performed and any remaining limitations. Do not dump the whole Markdown into the response unless requested.
+
+For a successful upload, also include the presenter link, optionally the audience shortlink, and an explicit statement that the draft was uploaded but not published.
+
+If the user explicitly wants Markdown text only, provide it without creating or uploading an archive, and explain any supporting files it needs. If file tools are unavailable, state the limitation and provide the complete file contents and packaging instructions; never claim to have created a ZIP that does not exist.
