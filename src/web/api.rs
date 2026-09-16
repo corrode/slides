@@ -1194,6 +1194,246 @@ mod tests {
         assert_eq!(new.source, converted.draft_source);
     }
 
+    const INVALID_MERMAID_SOURCE: &str = "# Bad
+
+---
+
+```mermaid
+sequenceDiagram
+    accTitle: A later Kafka commit advances past an earlier failure
+    accDescr: Record 40 fails. Record 41 succeeds and commits position 42.
+    participant K as Kafka partition
+    participant C as Consumer
+    K->>C: Record 40
+    Note over C: Write fails; skip commit
+    K->>C: Record 41
+    Note over C: Write succeeds
+```";
+
+    async fn assert_mermaid_validation_error(response: Response) {
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "validation_error");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains("slide 2, Mermaid diagram 1"), "{message}");
+        let diagnostic = message.to_lowercase();
+        assert!(
+            diagnostic.contains("parse error") || diagnostic.contains("syntax error"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_mermaid_bundle_creates_nothing_and_corrected_upload_succeeds() {
+        let (directory, pool, app) = test_app().await;
+        let response = app
+            .clone()
+            .oneshot(upload("demo", bundle_zip(INVALID_MERMAID_SOURCE, "bad")))
+            .await
+            .unwrap();
+        assert_mermaid_validation_error(response).await;
+        assert!(store::deck_by_slug(&pool, "demo").await.unwrap().is_none());
+        assert!(store::active_session(&pool).await.unwrap().is_none());
+        let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deck_versions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(versions, 0);
+        let registered: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM presentation_bundles")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(registered, 0);
+        assert!(generations(directory.path()).is_empty());
+        assert_no_temporary_directories(directory.path());
+
+        let corrected =
+            INVALID_MERMAID_SOURCE.replace("Write fails; skip commit", "Write fails, no commit");
+        let response = app
+            .oneshot(upload("demo", bundle_zip(&corrected, "fixed")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(json_body(response).await["title"], "Bad");
+        let deck = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(deck.draft_source, corrected);
+        let paths = generations(directory.path());
+        assert_eq!(paths.len(), 1);
+        let generation = paths[0].file_name().unwrap().to_str().unwrap();
+        assert!(store::bundle_exists(&pool, generation).await.unwrap());
+        assert_eq!(
+            fs::read_to_string(paths[0].join("demo.html")).unwrap(),
+            "fixed"
+        );
+        assert_no_temporary_directories(directory.path());
+    }
+
+    #[tokio::test]
+    async fn invalid_mermaid_replacement_preserves_draft_published_live_and_assets() {
+        let (directory, pool, app) = test_app().await;
+        let published_source = "# Published\n\n:::iframe\nsrc=\"demo.html\"\ntitle=\"Demo\"\n:::\n";
+        assert_eq!(
+            app.clone()
+                .oneshot(upload(
+                    "demo",
+                    bundle_zip(published_source, "published asset")
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let imported = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        let theme = Theme {
+            headline_font: "georgia".into(),
+            text_font: "merriweather".into(),
+            code_font: "system-mono".into(),
+            background: "#102030".into(),
+            text: "#eeeeee".into(),
+            accent: "#abcdef".into(),
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(admin_form(
+                    "demo",
+                    "save",
+                    &deck_form("Published", &imported.draft_source, &theme),
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let published_deck = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(Theme::from(&published_deck).style(), theme.style());
+        let version_id = publish_stored_draft(&pool, &published_deck).await;
+        let session = store::start_session(&pool, published_deck.id, version_id)
+            .await
+            .unwrap();
+        let draft_source = published_source.replace("# Published", "# Draft");
+        assert_eq!(
+            app.clone()
+                .oneshot(upload("demo", bundle_zip(&draft_source, "draft asset")))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let before = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(Theme::from(&before).style(), theme.style());
+        let paths = generations(directory.path());
+        assert_eq!(paths.len(), 2);
+        let assets: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                (
+                    fs::read(path.join("slides.md")).unwrap(),
+                    fs::read(path.join("demo.html")).unwrap(),
+                )
+            })
+            .collect();
+        let registered: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT generation, deck_id FROM presentation_bundles ORDER BY generation",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(registered.len(), 2);
+
+        let response = app
+            .clone()
+            .oneshot(upload("demo", bundle_zip(INVALID_MERMAID_SOURCE, "bad")))
+            .await
+            .unwrap();
+        assert_mermaid_validation_error(response).await;
+
+        let after = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.draft_source, before.draft_source);
+        assert_eq!(Theme::from(&after).style(), Theme::from(&before).style());
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM deck_versions WHERE deck_id = ? ORDER BY id")
+                .bind(before.id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(versions, vec![version_id]);
+        let published = store::get_version(&pool, version_id).await.unwrap();
+        assert_eq!(published.title, published_deck.title);
+        assert_eq!(published.source, published_deck.draft_source);
+        assert_eq!(
+            Theme::from(&published).style(),
+            Theme::from(&published_deck).style()
+        );
+        let active = store::active_session(&pool).await.unwrap().unwrap();
+        assert_eq!(active.id, session.id);
+        assert_eq!(active.deck_id, before.id);
+        assert_eq!(active.code, session.code);
+        let live = store::get_session(&pool, session.id).await.unwrap();
+        assert_eq!(live.deck_version_id, session.deck_version_id);
+        assert_eq!(live.code, session.code);
+        assert_eq!(live.current_slide, session.current_slide);
+        assert_eq!(live.locked, session.locked);
+        assert_eq!(live.interaction_open, session.interaction_open);
+        assert_eq!(live.results_revealed, session.results_revealed);
+        assert_eq!(live.follow_revision, session.follow_revision);
+        assert_eq!(live.ended_at, session.ended_at);
+        let registered_after: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT generation, deck_id FROM presentation_bundles ORDER BY generation",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(registered_after, registered);
+        assert_eq!(generations(directory.path()), paths);
+        for (path, (source, html)) in paths.iter().zip(&assets) {
+            assert_eq!(fs::read(path.join("slides.md")).unwrap(), *source);
+            assert_eq!(fs::read(path.join("demo.html")).unwrap(), *html);
+        }
+        assert_no_temporary_directories(directory.path());
+
+        let corrected =
+            INVALID_MERMAID_SOURCE.replace("Write fails; skip commit", "Write fails, no commit");
+        let response = app
+            .oneshot(upload("demo", bundle_zip(&corrected, "fixed")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let fixed = store::deck_by_slug(&pool, "demo").await.unwrap().unwrap();
+        assert_eq!(fixed.id, before.id);
+        assert_eq!(fixed.title, "Bad");
+        assert_eq!(fixed.draft_source, corrected);
+        assert_eq!(Theme::from(&fixed).style(), theme.style());
+        let fixed_paths = generations(directory.path());
+        assert_eq!(fixed_paths.len(), paths.len() + 1);
+        let new_path = fixed_paths
+            .iter()
+            .find(|path| !paths.contains(path))
+            .unwrap();
+        let generation = new_path.file_name().unwrap().to_str().unwrap();
+        assert!(store::bundle_exists(&pool, generation).await.unwrap());
+        assert_eq!(
+            fs::read_to_string(new_path.join("demo.html")).unwrap(),
+            "fixed"
+        );
+        for (path, (source, html)) in paths.iter().zip(&assets) {
+            let generation = path.file_name().unwrap().to_str().unwrap();
+            assert!(store::bundle_exists(&pool, generation).await.unwrap());
+            assert_eq!(fs::read(path.join("slides.md")).unwrap(), *source);
+            assert_eq!(fs::read(path.join("demo.html")).unwrap(), *html);
+        }
+        assert_eq!(
+            store::get_version(&pool, version_id).await.unwrap().source,
+            published_deck.draft_source
+        );
+        assert_eq!(
+            store::active_session(&pool).await.unwrap().unwrap().id,
+            session.id
+        );
+        assert_no_temporary_directories(directory.path());
+    }
+
     #[tokio::test]
     async fn failed_replacements_preserve_draft_and_assets() {
         let (directory, pool, app) = test_app().await;

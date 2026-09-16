@@ -40,11 +40,12 @@ From the directory containing these files, create a fresh archive with `python3 
 
 - Maximum ZIP body: **20 MiB**; maximum actual extracted bytes: **100 MiB**.
 - Maximum **512 entries**, including directory entries; `slides.md` is limited to **2 MiB**, each `.html` or `.htm` file to **4 MiB**. Resolved Markdown is limited to **100 MiB**.
+- Maximum **100 Mermaid diagrams per bundle**, counting rendered Mermaid fences in slides and presenter notes; each diagram is limited to **50,000 UTF-16 code units**, matching the browser's per-diagram limit.
 - Only Stored and Deflated ZIP entries are supported. Encrypted archives, symlinks, special files, duplicate paths (ASCII case-insensitive), file/directory collisions, and corrupt entries are rejected.
 - Path segments use only ASCII letters, digits, `.`, `-`, and `_`. Empty segments, `.` or `..` segments, trailing dots, absolute paths, backslashes, spaces, percent-encoded paths, and non-ASCII names are rejected.
 - Allowed file extensions (case-insensitive): `rs`, `c`, `h`, `cpp`, `hpp`, `py`, `go`, `java`, `ts`, `tsx`, `jsx`, `sh`, `toml`, `json`, `yaml`, `yml`, `txt`, `css`, `js`, `mjs`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `ico`, `avif`, `woff`, `woff2`, `ttf`, `otf`, `md`, `html`, `htm`.
 
-Upload validation inlines code includes and rewrites local Markdown/iframe asset references to immutable generation URLs, then validates Slides Markdown. Original files remain in a new immutable generation; the draft stores resolved, browser-editable Markdown. Browser edits to Markdown, inlined code, title, or theme do not modify those imported files. Keep generated asset URLs when editing the imported draft; use bundle-relative paths in ZIP source files.
+Upload validation inlines code includes and rewrites local Markdown/iframe asset references to immutable generation URLs, then validates Slides Markdown and the Mermaid fences it actually renders, including presenter notes (see [Mermaid diagrams](#mermaid-diagrams)). Invalid Mermaid returns HTTP `422` with `error.code: validation_error`; the message identifies the slide and per-slide diagram number. Validation happens before any draft or assets are registered, so a rejected upload leaves the previous draft, published versions, and live sessions untouched. Original files remain in a new immutable generation; the draft stores resolved, browser-editable Markdown. Browser edits to Markdown, inlined code, title, or theme do not modify those imported files. Keep generated asset URLs when editing the imported draft; use bundle-relative paths in ZIP source files.
 
 A subsequent complete ZIP replaces the draft content and title, including browser edits, rather than merging changes. New imports use the default theme; replacements preserve the deck's existing theme. Published versions, their assets, and running sessions remain unchanged. To change imported asset files, upload a complete replacement ZIP. Legacy path handling remains available for compatibility as described below, not as a separate deck type.
 
@@ -142,6 +143,10 @@ flowchart LR
 ````
 
 Slides uses the vendored Mermaid 11.17.2 browser renderer in strict security mode. Diagrams work in editor previews, presenter and audience views, print/PDF output, and downloadable session archives. The original escaped source remains visible if JavaScript is unavailable or Mermaid rejects the diagram.
+
+ZIP POST uploads validate syntax with exactly pinned `merman-core 0.8.0-alpha.6`, an alpha Rust parser with a Mermaid 11.17.2 baseline. Validation follows the Mermaid fences that Slides actually renders in slide content and presenter notes, not apparent fences quoted inside code examples. Embedded HTML is not inspected for Mermaid. The bundle limit is 100 diagrams; each diagram may contain at most 50,000 UTF-16 code units, matching the browser's per-diagram limit.
+
+This server check is Rust-only and requires no Node or browser runtime. Parsing has a shared 10-second cooperative deadline per bundle; if it expires, simplify the diagrams and retry. ZenUML is rejected because it is not included in the app's browser renderer. The alpha parser has known compatibility gaps with the browser renderer; passing syntax validation does not guarantee rendering or layout. Use browser preview to check rendering and readability. Only ZIP uploads receive this check; browser editing and `slides validate <FILE>` are unchanged.
 
 Mermaid blocks may coexist with an interaction, iframe, or notes block and do not count toward the one-interaction-per-slide limit. Keep diagrams compact enough for a 16:9 slide. Add Mermaid's `accTitle` and `accDescr` declarations so the generated SVG has an accessible name and description. Custom scripts and raw HTML are not supported.
 

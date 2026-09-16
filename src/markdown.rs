@@ -24,6 +24,8 @@ pub struct Slide {
     pub interaction: Option<Interaction>,
     pub notes: Option<String>,
     pub iframe_assets: Vec<String>,
+    /// Rendered Mermaid sources, slide body first and then presenter notes.
+    pub mermaid_diagrams: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -363,7 +365,8 @@ fn parse_slide(source: &str, slide_index: usize) -> Result<Slide> {
         bail!("slide content contains a reserved iframe marker");
     }
     let extracted = extract_directives(&source)?;
-    let mut html = render_markdown(&extracted.markdown)?;
+    let mut mermaid_diagrams = Vec::new();
+    let mut html = render_markdown(&extracted.markdown, &mut mermaid_diagrams)?;
     for (iframe_index, iframe) in extracted.iframes.iter().enumerate() {
         let marker = format!("<p>{}</p>\n", iframe_marker(iframe_index));
         if !html.contains(&marker) {
@@ -385,9 +388,10 @@ fn parse_slide(source: &str, slide_index: usize) -> Result<Slide> {
         interaction: extracted.interaction,
         notes: extracted
             .notes
-            .map(|notes| render_markdown(&notes))
+            .map(|notes| render_markdown(&notes, &mut mermaid_diagrams))
             .transpose()?,
         iframe_assets,
+        mermaid_diagrams,
     })
 }
 
@@ -766,7 +770,7 @@ fn parse_arguments(
     Ok(arguments)
 }
 
-fn render_markdown(source: &str) -> Result<String> {
+fn render_markdown(source: &str, mermaid_diagrams: &mut Vec<String>) -> Result<String> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -793,6 +797,9 @@ fn render_markdown(source: &str) -> Result<String> {
                     rendered_events.push(Event::Html(CowStr::Boxed(
                         render_code_block(&language, &code, ide_url.as_deref()).into_boxed_str(),
                     )));
+                    if language.eq_ignore_ascii_case("mermaid") {
+                        mermaid_diagrams.push(code);
+                    }
                 }
             }
             Event::Text(text) if code_block.is_some() => {
@@ -1109,6 +1116,32 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn collects_exactly_the_mermaid_blocks_that_are_rendered() {
+        let deck = parse_deck(
+            "# Diagrams\n\n> ~~~MeRmAiD\n> flowchart LR\n> A --> B\n> ~~~\n\n- Example\n\n  ```mermaid\n  sequenceDiagram\n  A->>B: hello\n  ```\n\n````markdown\n```mermaid\nnot a diagram\n```\n````\n\n    ```mermaid\n    also just code\n    ```\n\n<!--\n```mermaid\nnot rendered as a diagram\n```\n-->\n\n:::notes\n```mermaid\npie\n\"Yes\": 1\n```\n:::"
+        ).unwrap();
+        let slide = &deck.slides[0];
+        assert_eq!(
+            slide.mermaid_diagrams,
+            [
+                "flowchart LR\nA --> B\n",
+                "sequenceDiagram\nA->>B: hello\n",
+                "pie\n\"Yes\": 1\n",
+            ]
+        );
+        assert_eq!(slide.html.matches("data-mermaid-diagram").count(), 2);
+        assert_eq!(
+            slide
+                .notes
+                .as_ref()
+                .unwrap()
+                .matches("data-mermaid-diagram")
+                .count(),
+            1
+        );
     }
 
     #[test]

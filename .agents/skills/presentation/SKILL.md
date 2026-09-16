@@ -159,11 +159,24 @@ Reference existing bundle-relative paths:
 - No external images or iframe URLs. Ordinary navigation links may use HTTP(S), mailto, `zed:`, or fragments. Keep supplied Zed URLs as clickable Markdown links, including in presenter notes; do not downgrade them to copyable text. For example: `[Open in Zed](zed://file/Users/example/project/main.rs:12:3)`. Targets refer to the viewer's Zed installation, are not bundled files, and may require browser permission to open. Preserve supplied paths rather than inventing local file locations.
 - In ZIP source files, do not author `/assets/...` paths or fabricate generation URLs; the importer rewrites asset references to immutable generation URLs. Keep those generated URLs when editing the imported draft in the browser. Browser edits do not modify imported assets; changing asset files requires a complete replacement ZIP. Do not link to `slides.md`, which is private source and may contain notes.
 - Prefer a small fenced `mermaid` diagram when appropriate. Include accessibility text using `accTitle` and `accDescr` where supported; avoid custom scripts, initialization directives, and raw HTML.
+- Mermaid labels are part of a language, not unrestricted prose. In sequence-diagram notes and messages, avoid literal semicolons: they can terminate a statement. Write `Note over C: Write fails, no commit`, not `Note over C: Write fails; skip commit`. This is an example of a syntax hazard, not a substitute for server syntax validation and browser preview.
 - HTML demos must be self-contained and trusted. Bundle their JavaScript, CSS, images, and fonts; resolve dependencies relative to the HTML/CSS file. No CDN dependencies, external fetches, or build/install steps on the server.
 - HTML runs in a sandbox without parent-page access, same-origin privileges, forms, popups, or fetch/WebSocket connections. Do not weaken that sandbox to make a demo work. A frame can navigate itself; sandboxing is not proof that arbitrary content is safe.
 - Presenter notes are excluded from audience rendering. Do not put private material in supporting files: assets can be served or included in audience archives.
 
 ## 4. Package and check
+
+### Mermaid syntax validation and preview
+
+ZIP POST uploads syntax-check the Mermaid fences that Slides actually renders in slides and presenter notes using exactly pinned `merman-core 0.8.0-alpha.6` (Mermaid 11.17.2 baseline). Limits are **100 Mermaid diagrams per bundle** and **50,000 UTF-16 code units per diagram**, matching the browser's per-diagram limit. Embedded HTML is not inspected for Mermaid. This check applies only to ZIP uploads; browser editing and the CLI are unchanged.
+
+Server syntax validation is Rust-only, with no Node or browser runtime dependency and no mandatory local Mermaid preflight. Invalid Mermaid returns HTTP `422` with `error.code: validation_error` and a message identifying the slide and per-slide diagram number, before any draft or assets are registered. The previous draft, published versions, and live sessions remain untouched. Use that feedback to fix the source, rebuild the complete ZIP, and retry an authorized upload; never suppress validation failures.
+
+The alpha Rust parser has known compatibility gaps with Mermaid's browser renderer. Server acceptance is not a rendering or layout guarantee. Use Slides browser preview when available to check rendering and readability. If no local browser or preview is available, disclose that visual checks were not performed, but do not block a requested upload or require extra permission solely for that limitation.
+
+Parsing and SVG rendering are separate from visual quality. Inspect the slides too: ensure diagrams replace the raw source, no error fallback appears, labels are readable, and headings leave enough room for the content. Shorten an oversized heading or split the slide rather than squeezing the diagram beneath it. A heading may wrap when it remains readable and leaves enough space; two lines alone are not a failure.
+
+### Build and inspect the archive
 
 Create a **fresh** ZIP with Stored or Deflated entries, using explicit source paths. For example, from the verified source directory:
 
@@ -181,6 +194,7 @@ Before handing off or uploading, inspect the actual ZIP, not just the source tre
 - No symlinks, special files, encryption, duplicate paths, case-only collisions, or file/directory collisions.
 - Every explicit local image, link, iframe, and code reference exists. Check static HTML/CSS dependencies too; exercise interactive demos where possible.
 - All fences close; slide separators are outside code blocks. Interactions satisfy their semantic rules.
+- Keep Mermaid within the diagram count and UTF-16 limits above. The archived `slides.md` must match the final source; rebuild after edits. Syntax validation happens on upload, not through a mandatory local helper.
 - List the archive entries, check CRCs, and calculate compressed/extracted sizes. Confirm the source directory remains usable for the next revision.
 
 Be precise about validation. `slides validate <FILE>` is a Markdown CLI, **not a bundle validator**. It uses legacy code-reference and iframe-path handling, so bundle-relative source can fail there even when valid for upload. Do not change correct authoring paths to satisfy it, and do not claim a CLI pass validates the archive. There is currently no bundle dry-run endpoint or dedicated ZIP validation command. The upload handler performs authoritative bundle validation before accepting a draft.
@@ -213,6 +227,8 @@ If the user asks to publish, explain that they must choose Publish in the presen
 ## Deliver the result
 
 Default to a short handoff with clickable paths to the **source directory**, **`slides.md`**, and **ZIP**, plus the checks actually performed and any remaining limitations. Do not dump the whole Markdown into the response unless requested.
+
+Report validation separately: archive checks, server Mermaid syntax validation (accepted, rejected, or not uploaded), and browser rendering/visual slide inspection (performed or not performed). Never summarize an upload response as “everything validated.”
 
 For a successful upload, also include the presenter link, optionally the audience shortlink, and an explicit statement that the draft was uploaded but not published.
 

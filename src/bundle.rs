@@ -195,7 +195,9 @@ pub fn extract(bytes: &[u8], destination: &Path, generation: &str) -> Result<Bun
     let source = resolve_code(&original, destination)?;
     let source = rewrite_iframes(&source, destination, generation)?;
     let source = rewrite_markdown(&source, destination, generation)?;
-    crate::markdown::parse_deck(&source).map_err(|e| invalid(format!("invalid slides: {e:#}")))?;
+    let deck = crate::markdown::parse_deck(&source)
+        .map_err(|e| invalid(format!("invalid slides: {e:#}")))?;
+    crate::mermaid::validate(&deck).map_err(|e| invalid(format!("invalid slides: {e:#}")))?;
     Ok(Bundle {
         title,
         source,

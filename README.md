@@ -58,6 +58,10 @@ Upload a complete ZIP as the raw request body with `Content-Type: application/zi
 
 The ZIP must contain UTF-8 `slides.md` at its root, not inside a wrapper directory. Its first H1 supplies the title; keep it nonempty and at most 120 characters. There is no manifest or metadata request body. Include all referenced code, images, HTML, scripts, styles, and fonts in the same ZIP. Limits: 20 MiB ZIP, 100 MiB extracted, 512 entries (including directories), 2 MiB for `slides.md`, and 4 MiB per HTML file. See the [bundle format](docs/slide-format.md#presentation-bundles) for supported paths and file types.
 
+ZIP uploads syntax-check the Mermaid fences that Slides actually renders in slides and presenter notes using exactly pinned `merman-core 0.8.0-alpha.6` (Mermaid 11.17.2 baseline). Limits are **100 Mermaid diagrams per bundle** and **50,000 UTF-16 code units per diagram**, matching the browser's per-diagram limit. Invalid Mermaid returns HTTP `422` with `error.code: validation_error` and a message identifying the slide and per-slide diagram number, before any draft or assets are registered. The previous draft, published versions, and live sessions remain untouched.
+
+Server syntax validation is Rust-only, with no Node or browser runtime dependency. The alpha Rust parser has known compatibility gaps with Mermaid; acceptance is not a rendering or layout guarantee. Use browser preview to check rendering and readability. This validation applies only to ZIP POST uploads: browser editing and the CLI are unchanged, and embedded HTML is not inspected for Mermaid.
+
 For a minimal upload, run this from a directory containing `slides.md`. Python's standard library creates a ZIP with no wrapper parent:
 
 ```sh

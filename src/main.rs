@@ -3,6 +3,7 @@ mod bundle;
 mod cli;
 mod error;
 mod live;
+mod mermaid;
 mod models;
 mod store;
 mod web;
