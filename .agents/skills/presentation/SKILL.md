@@ -11,7 +11,25 @@ When working in the Slides repository, use `docs/slide-format.md` as the syntax 
 
 ## 1. Establish the task
 
-Use the supplied audience, topic, source material, duration, and desired outcome. Ask only for missing information that would materially change the presentation. Otherwise choose reasonable defaults and proceed.
+Before creating or revising a presentation, show a prefilled metadata summary and wait for approval. Use the user's request, supplied material, and existing deck to fill it in. Propose reasonable defaults for planning choices, but do not invent an author, affiliation, event, or date. Mark unknown optional details as “Not specified; omit” and label inferred choices as proposed.
+
+Include these fields in a compact two-column table:
+
+- Title
+- Author / presenter
+- Audience and assumed knowledge
+- Goal: what the audience should understand, decide, or do
+- Duration and approximate slide count
+- Language
+- Event / date, if relevant
+- Output directory and proposed slug
+- Requested action: create or revise locally, upload, or prepare for publication
+
+Fill in actual proposed values, not an empty questionnaire. Preserve existing values when revising a deck unless the user requests a change. Ask separately only for missing information that prevents a useful proposal.
+
+End with: **“Reply `y` to accept, or tell me which fields to change.”** Then stop. Do not outline slides, draft content, create files, build a ZIP, or upload before approval. Reading supplied material to prepare the summary is allowed. If the user changes fields, show the updated summary and ask for `y` again. A `y` accepts the latest summary; it does not authorize actions beyond the displayed request. Default to local creation unless the user has asked for upload.
+
+This summary is an authoring agreement, not a new bundle metadata format. The title becomes the first H1. If approved, author, event, and date may appear as ordinary text on the opening slide; planning fields guide the work and need not appear on slides. Do not introduce frontmatter, a manifest, or unsupported API fields.
 
 Distinguish the requested action:
 
@@ -46,6 +64,8 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 ### Slide composition
 
 - Design a slide to support a spoken explanation, not to serve as a reference page. Choose one main element: a code example, diagram, comparison, statement, or audience question. Add only the context needed to understand it.
+- Use no more than four bullet points per slide, counting nested bullets. Aim for ten words or fewer per bullet; never exceed fifteen. Do not evade these limits with dense paragraphs or tables. Split the slide or move detail to speaker notes.
+- Focus visible text on what is wrong, what should change, and why it matters. For architecture slides, state the problem, proposed solution, or impact. Leave granular mechanics and execution steps to speaker notes.
 - Make the first glance useful: the audience should see the topic and know where to look. A heading plus one main element is a good starting point, not a mandatory template. Do not stack a diagram, table, bold takeaway, blockquote, and source link just because each fits.
 - Write simple, easy-to-understand headings that get straight to the point and name the specific question or conclusion. The audience should understand them at a glance, without decoding clever wording or jargon. Keep them short enough to leave room for the content. Avoid vague exhortations such as “Choose one boundary to improve” when a concrete decision would tell the audience more.
 - Let the example carry the explanation. Do not repeat the same point in the heading, body, bold text, and blockquote. Reserve blockquotes for actual quotations, not visual emphasis around ordinary instructions.
@@ -58,7 +78,9 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 - Match the diagram's direction to the slide's available space. For a short pipeline on a wide slide, try `flowchart LR` before `TD`. Keep labels short, remove unnecessary nodes and edge captions, and check the rendered result. If it still needs tiny text, split the diagram or give it a slide of its own.
 - Use a diagram to explain a relationship, transition, or dependency. If it only restates a nearby table or sentence, choose the clearer representation and remove the other. A three-step process may need only three short lines, not a graph.
 - Use tables when the audience needs to compare entries along the same dimensions. Keep cells brief and rows few. Put detailed responsibility inventories in supporting material when the slide's real purpose is to explain one distinction.
-- Show only the code needed to establish the point, with enough context to make it understandable. Put the full implementation behind an IDE source link or in supporting files. Never shrink code to fit a whole implementation.
+- Show only the 2-4 lines that contain the bug or demonstrate the fix. Never paste an entire function onto a slide. Put the full implementation behind an IDE source link or in supporting files; do not shrink it to fit.
+- Preserve exact, searchable identifiers: function names, struct names, or distinctive error types. Include the relevant symbol in the snippet or a short label so the audience can find it with Cmd+F or Ctrl+F in their editor. Do not rename real symbols for brevity.
+- Replace irrelevant boilerplate, setup, and routine error logging with `// ...` or `/* ... */` where valid for the language. Never elide logic needed to understand the bug or establish that the fix works. Mark incomplete snippets as excerpts, not runnable examples; keep any runnable version in a separate supporting file.
 - Keep references available without making them compete with the explanation. Prefer the snippet's IDE link for code navigation. Use brief, descriptive Markdown links for other sources and explain worksheets or homework on a dedicated next-step slide.
 
 ### Questions and audience participation
@@ -67,12 +89,27 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 - Ask about a concrete choice the audience is equipped to make. For example, “Which change should we try first?” could offer “Separate persistence from live state,” “Separate metadata from open files,” and “Represent compaction as a plan,” after those alternatives have been explained. Preserve the technical distinction without turning each option into a paragraph.
 - Separate teaching, discussion, and follow-up. Do not end with a general instruction, a second instruction in a blockquote, a worksheet link, and a poll all competing for attention.
 
+### Speaker notes
+
+Every slide must include one dedicated `:::notes` block, including opening, poll, and closing slides. This is the app's presenter-only speaker-notes section, not a visible “Speaker Notes” heading.
+
+Use notes for the spoken explanation: granular logic, execution order, relevant code history, and transitions or audience prompts. Explain why the shown lines matter rather than repeating them. Keep notes proportional to the slide; a title slide may need only a brief opening cue. Historical context must help explain the code or decision, not recount the authoring conversation.
+
+```markdown
+:::notes
+Explain how the failing path reaches this call, which invariant it breaks,
+and why the proposed change preserves that invariant.
+:::
+```
+
 ### Check the rendered slides
 
 Inspect every slide at the intended presentation size when a preview is available. Check the rendered output, not just the Markdown:
 
 - Is there one obvious focus, with a simple, direct heading that is understandable at a glance?
 - Can the audience read and grasp the slide quickly while still following the speaker?
+- Are there at most four bullets, each no longer than fifteen words, and only 2-4 relevant code lines per snippet?
+- Does every slide have meaningful speaker notes, with detailed mechanics kept off-screen?
 - Can the audience read every diagram label, code line, table cell, and poll choice without zooming?
 - Does every visible element add something, rather than repeat or distract?
 - Does the slide fit comfortably without clipping, awkward wrapping, or tiny content?
@@ -107,20 +144,20 @@ The archive contains the **contents** of `my-talk/`, not the parent directory.
 - No frontmatter, `bundle.json`, theme metadata, or multi-file deck composition. Additional Markdown files are supporting material, not automatically included slides.
 - Use CommonMark with tables, strikethrough, task lists, and fenced code. Raw HTML in Markdown is not a layout mechanism.
 - Do not invent columns, reveal markers, slide classes, or background directives. New imports use the app's default theme. Every draft's theme is browser editable; replacement preserves the deck's existing theme.
-- Use at most one `:::notes` block and one interaction per slide. Close directive blocks with `:::` and consult the format reference for exact attributes.
+- Include exactly one `:::notes` block and at most one interaction per slide. Close directive blocks with `:::` and consult the format reference for exact attributes.
 - Polls and ordering exercises need at least two items. Quizzes need at least two options and one marked correct answer. Word clouds have no body. Attribute values use double quotes, with no embedded quote escaping.
 - Keep reference-style link definitions on the slide using them; reference labels are slide-local.
 
 ### Code
 
-Use inline fenced code for short examples. Put reusable or longer examples in real UTF-8 files under `code/`, included through an otherwise empty fence:
+Use inline fenced code for the short excerpts shown on slides. Keep complete implementations and runnable examples in real UTF-8 files under `code/` and link to them rather than displaying them in full. To reuse a short excerpt, store it in its own file and include it through an otherwise empty fence:
 
 ````markdown
 ```rust code/example.rs
 ```
 ````
 
-Includes expand the whole file into inline code at upload. That code is browser editable without changing the imported source file. Do not use line ranges, regions, placeholders, or extra fence arguments other than one trailing `ide="URL"` attribute. Use a longer fence if included content could close it.
+Includes expand the whole file into inline code at upload. That code is browser editable without changing the imported source file. The include syntax does not support line ranges, regions, placeholder paths, or extra fence arguments other than one trailing `ide="URL"` attribute. To trim an include, create an actual excerpt file; elision comments inside its code are ordinary text, not importer directives. Use a longer fence if included content could close it.
 
 #### Link a snippet to its source in an IDE
 
@@ -168,9 +205,9 @@ Reference existing bundle-relative paths:
 
 ### Mermaid syntax validation and preview
 
-ZIP POST uploads syntax-check the Mermaid fences that Slides actually renders in slides and presenter notes using exactly pinned `merman-core 0.8.0-alpha.6` (Mermaid 11.17.2 baseline). Limits are **100 Mermaid diagrams per bundle** and **50,000 UTF-16 code units per diagram**, matching the browser's per-diagram limit. Embedded HTML is not inspected for Mermaid. This check applies only to ZIP uploads; browser editing and the CLI are unchanged.
+ZIP POST uploads syntax-check the Mermaid fences that Slides actually renders in slides and presenter notes using pinned `merman-core 0.8.0-alpha.6` (Mermaid 11.17.2 baseline). Limits are **100 Mermaid diagrams per bundle** and **50,000 UTF-16 code units per diagram**, matching the browser's per-diagram limit. Parsing has a shared 10-second cooperative deadline per bundle; simplify the diagrams before retrying if it expires. Do not use ZenUML: it is not included in the app's browser renderer and uploads reject it. Embedded HTML is not inspected for Mermaid. This check applies only to ZIP uploads; browser editing and the CLI are unchanged.
 
-Server syntax validation is Rust-only, with no Node or browser runtime dependency and no mandatory local Mermaid preflight. Invalid Mermaid returns HTTP `422` with `error.code: validation_error` and a message identifying the slide and per-slide diagram number, before any draft or assets are registered. The previous draft, published versions, and live sessions remain untouched. Use that feedback to fix the source, rebuild the complete ZIP, and retry an authorized upload; never suppress validation failures.
+Rely on the server's Rust-only syntax validation. Do not add a Node, jsdom, or Chrome validation step or install parser tooling as part of authoring; browser preview is for checking rendering and readability, not a prerequisite for upload. Invalid Mermaid returns HTTP `422` with `error.code: validation_error` and a message identifying the slide and per-slide diagram number, before any draft or assets are registered. The previous draft, published versions, and live sessions remain untouched. Use that feedback to fix the source, rebuild the complete ZIP, and retry an authorized upload; never suppress validation failures.
 
 The alpha Rust parser has known compatibility gaps with Mermaid's browser renderer. Server acceptance is not a rendering or layout guarantee. Use Slides browser preview when available to check rendering and readability. If no local browser or preview is available, disclose that visual checks were not performed, but do not block a requested upload or require extra permission solely for that limitation.
 
