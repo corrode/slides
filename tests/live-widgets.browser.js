@@ -162,6 +162,35 @@ export async function run() {
     finally { f?.dispose(); }
   };
 
+  await test("slide tables use left-aligned headers and theme-aware hairlines", async (f) => {
+    const content = f.query(".slide-content");
+    content.innerHTML = `<h1>Zwei Worker, zwei unterschiedliche Aufgaben</h1><table><thead><tr><th>Ingestion</th><th>Relay</th></tr></thead><tbody><tr><td>Kafka-Nachricht empfangen</td><td>Inbox-Zeile sperren</td></tr><tr><td>Inbox oder DLQ dauerhaft speichern</td><td>Handler mit Transaktion ausführen</td></tr><tr><td>Kafka-Offset bestätigen</td><td>Ergebnis speichern und committen</td></tr></tbody></table>`;
+    content.style.setProperty("--highlight", "var(--text)");
+    const colors = [];
+    for (const scheme of ["dark", "light"]) {
+      f.d.documentElement.dataset.colorScheme = scheme;
+      for (const cell of content.querySelectorAll("th, td")) {
+        const style = f.w.getComputedStyle(cell);
+        assert(style.textAlign === "left", "Table cell is not left aligned");
+        assert(style.borderBottomWidth === "1px" && style.borderBottomStyle === "solid", "Missing horizontal hairline");
+        assert(style.borderLeftWidth === "0px" && style.borderRightWidth === "0px", "Unexpected vertical rules");
+      }
+      colors.push(f.w.getComputedStyle(content.querySelector("th")).borderBottomColor);
+      await browserCommand("screenshot", `table-${scheme}`);
+    }
+    assert(colors[0] !== colors[1], "Header rule does not follow the color scheme");
+    f.d.documentElement.dataset.colorScheme = "dark";
+    await browserCommand("media", "print");
+    try {
+      const style = f.w.getComputedStyle(content.querySelector("th"));
+      assert(style.borderBottomWidth === "1px" && style.borderBottomColor !== colors[0], "Print rule retains the dark theme color");
+    } finally {
+      await browserCommand("media", "screen");
+    }
+    content.querySelector("th").style.textAlign = "right";
+    assert(f.w.getComputedStyle(content.querySelector("th")).textAlign === "right", "Explicit Markdown alignment was overridden");
+  }, { preview: [0] });
+
   await test("preview starts at step 0; next reveals before changing slides, previous hides before returning fully revealed", async (f) => {
     assert(f.w.innerWidth >= 1280 && f.w.innerHeight >= 720, "Fixture viewport is not presentation-sized");
     assertPreview(f, 0, 0);

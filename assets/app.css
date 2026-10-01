@@ -1872,6 +1872,38 @@ form.htmx-request button {
   margin-bottom: 0;
 }
 
+.slide-content table {
+  width: 100%;
+  margin: 0 0 0.8em;
+  border-collapse: collapse;
+}
+
+.slide-content th,
+.slide-content td {
+  padding: 0.5em 0.8em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.slide-content th {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  color: var(--text);
+  font-weight: 650;
+}
+
+.slide-content td {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-soft);
+}
+
+.slide-content tr > :first-child {
+  padding-left: 0;
+}
+
+.slide-content tr > :last-child {
+  padding-right: 0;
+}
+
 .iframe-embed {
   display: flex;
   width: 100%;

@@ -1,6 +1,6 @@
 // Run: node tests/live-widgets.mjs [path/to/chrome]
 // Node >= 22 and local Chrome/Chromium; no npm packages or running app required.
-// LIVE_WIDGET_SCREENSHOTS=1 saves partial/all previews in target/live-widgets-screenshots/.
+// LIVE_WIDGET_SCREENSHOTS=1 saves reveal/table previews in target/live-widgets-screenshots/.
 import { createServer } from "node:http";
 import { readFile, mkdtemp, mkdir, writeFile, rm, access } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -127,7 +127,7 @@ try {
         const { command, value } = state.request;
         if (command === "media" && ["print", "screen"].includes(value)) {
           await call("Emulation.setEmulatedMedia", { media: value }, sessionId);
-        } else if (command === "screenshot" && /^preview-(partial|all)$/.test(value)) {
+        } else if (command === "screenshot" && /^(preview-(partial|all)|table-(dark|light))$/.test(value)) {
           if (screenshotDirectory) {
             await mkdir(screenshotDirectory, { recursive: true });
             const { data } = await call("Page.captureScreenshot", { format: "png" }, sessionId);
