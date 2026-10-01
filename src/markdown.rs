@@ -81,7 +81,7 @@ pub enum Interaction {
         max_length: usize,
     },
     Quiz {
-        question: String,
+        question: Option<String>,
         options: Vec<QuizOption>,
     },
     Ordering {
@@ -749,8 +749,8 @@ fn parse_quiz(header: &str, body: &[&str]) -> Result<Interaction> {
     let arguments = parse_arguments(header, &["question"], &[])?;
     let question = arguments
         .attribute("question")
-        .unwrap_or("Choose the correct answer")
-        .to_owned();
+        .filter(|question| !question.trim().is_empty())
+        .map(str::to_owned);
     let mut options = Vec::new();
     for line in body {
         let (correct, label) = if let Some(label) = line.strip_prefix("- [x]") {
@@ -2111,6 +2111,39 @@ mod tests {
                     ..
                 })
             ));
+        }
+    }
+
+    #[test]
+    fn quiz_questions_are_optional_and_preserve_authored_text() {
+        for (header, expected) in [
+            (":::quiz", None),
+            (":::quiz question=\"\"", None),
+            (":::quiz question=\" \t \"", None),
+            (
+                ":::quiz question=\"  Which <type> & why?  \"",
+                Some("  Which <type> & why?  "),
+            ),
+            (
+                ":::quiz question=\"Choose the correct answer\"",
+                Some("Choose the correct answer"),
+            ),
+        ] {
+            let deck = parse_deck(&format!(
+                "{header}\n- [x] String\n- [X] Vec<u8>\n- [ ] &str\n:::"
+            ))
+            .unwrap();
+            let Some(Interaction::Quiz { question, options }) = &deck.slides[0].interaction else {
+                panic!("expected a quiz");
+            };
+            assert_eq!(question.as_deref(), expected, "{header}");
+            assert_eq!(
+                options
+                    .iter()
+                    .map(|option| (option.label.as_str(), option.correct))
+                    .collect::<Vec<_>>(),
+                [("String", true), ("Vec<u8>", true), ("&str", false)]
+            );
         }
     }
 

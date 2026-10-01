@@ -323,9 +323,11 @@ A word-cloud block has no body in v1.
 
 | Input | Required | Meaning |
 | --- | --- | --- |
-| `question="…"` | No | Prompt shown to the audience. Defaults to `Choose the correct answer`. |
+| `question="…"` | No | Optional heading above the choices or results. Omitted, empty, or whitespace-only values render no heading in audience, results, preview, print, or archive views. |
 | `- [x] answer` | Yes | Defines a correct answer. Uppercase `[X]` is also accepted. |
 | `- [ ] answer` | Yes | Defines an incorrect answer. |
+
+Omit `question` when the slide heading already asks it. Explicit non-empty questions are preserved and HTML-escaped, including an authored `question="Choose the correct answer"`; that text is not treated specially. The audience's answer instructions remain available without a question heading.
 
 A quiz requires at least two non-empty checkbox options and at least one correct option. More than one answer may be marked correct.
 

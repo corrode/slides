@@ -211,7 +211,7 @@ Choose at most one per slide and keep it outside `:::reveal` and `:::notes`. Use
 | Directive | Body and options |
 | --- | --- |
 | `:::poll` | At least two top-level `- option` lines. Optional `question="…"`, `multiple`, and `orientation="horizontal"` or `"vertical"` for result bars. Omit `question` when the slide heading already asks it. |
-| `:::quiz` | At least two `- [x] correct` / `- [ ] incorrect` options, with at least one correct answer. Multiple correct answers are supported. Optional `question="…"`. |
+| `:::quiz` | At least two `- [x] correct` / `- [ ] incorrect` options, with at least one correct answer. Multiple correct answers are supported. Optional `question="…"`; omit it when the slide heading already asks the question. Omitted, empty, or whitespace-only questions add no interaction heading, including in print and archives; answer instructions remain available. Explicit non-empty questions are shown as authored. |
 | `:::wordcloud` | Empty body. Optional `prompt="…"` and `max="80"`; `max` controls answer length, not participant count. |
 | `:::ordering` | At least two top-level `- item` lines in their initial order. Optional `prompt="…"`. Participants reorder cards; results show aggregate group order, not automatic correctness grading. |
 

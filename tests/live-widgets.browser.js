@@ -162,6 +162,56 @@ export async function run() {
     finally { f?.dispose(); }
   };
 
+  await test("horizontal results keep full answer labels above bars at desktop and mobile widths", async (f) => {
+    const labels = [
+      "Nach dem Fehler länger warten, bevor der nächste Offset bestätigt wird.",
+      "✓ Dasselbe Event dauerhaft speichern, bevor der Offset bestätigt wird.",
+      "Auto-Commit deaktivieren und jeden Offset nach der Verarbeitung bestätigen.",
+    ];
+    const content = f.query(".slide-content");
+    content.style.setProperty("--highlight", "var(--text)");
+    content.innerHTML = `<h1>Welche Änderung verhindert diese Offset-Lücke?</h1><section class="interaction-body"><div class="interaction-heading"><span>0 answers</span></div><div class="results">${labels.map((label) => `<div class="result-row"><span>${escape(label)}</span><div class="bar-track"><div class="bar-fill" style="--value:0%"></div></div><span>0 · 0%</span></div>`).join("")}</div></section>`;
+    const assertLayout = () => {
+      for (const row of content.querySelectorAll(".result-row")) {
+        const [label, bar, count] = row.children;
+        const style = f.w.getComputedStyle(label);
+        const labelRect = label.getBoundingClientRect();
+        const barRect = bar.getBoundingClientRect();
+        const countRect = count.getBoundingClientRect();
+        assert(style.whiteSpace !== "nowrap" && style.textOverflow !== "ellipsis", "Answer labels are truncated");
+        assert(label.scrollWidth <= label.clientWidth + 1, "Answer text overflows its label");
+        assert(count.scrollWidth <= count.clientWidth + 1, "Count is clipped");
+        assert(barRect.top >= Math.max(labelRect.bottom, countRect.bottom), "Bar overlaps answer text or count");
+        assert(countRect.left >= labelRect.right, "Count overlaps answer text");
+        assert(Math.abs(barRect.width - row.getBoundingClientRect().width) < 1, "Bar does not span the result row");
+      }
+    };
+    for (const [name, width] of [["wide", 1440], ["narrow", 900]]) {
+      f.w.frameElement.style.width = `${width}px`;
+      await pause(50);
+      assertLayout();
+      const stage = f.query(".slide-stage").getBoundingClientRect();
+      const rows = [...content.querySelectorAll(".result-row")];
+      assert(rows.at(-1).getBoundingClientRect().bottom <= stage.bottom, "Results are clipped by the slide");
+      await browserCommand("screenshot", `quiz-${name}`);
+    }
+    // Audience pages scroll rather than squeezing their content into a 16:9 slide.
+    const audience = f.d.createElement("section");
+    audience.className = "interaction audience-slide";
+    audience.append(content);
+    f.d.body.replaceChildren(audience);
+    f.w.frameElement.style.width = "390px";
+    await pause(50);
+    assertLayout();
+    assert(f.d.documentElement.scrollWidth <= f.w.innerWidth, "Audience results overflow the viewport");
+    await browserCommand("screenshot", "quiz-mobile");
+    content.querySelector(".result-row > span").textContent = "VeryLongUnbrokenAnswer".repeat(8);
+    assertLayout();
+    await browserCommand("media", "print");
+    try { assertLayout(); }
+    finally { await browserCommand("media", "screen"); }
+  }, { preview: [0] });
+
   await test("slide tables use left-aligned headers and theme-aware hairlines", async (f) => {
     const content = f.query(".slide-content");
     content.innerHTML = `<h1>Zwei Worker, zwei unterschiedliche Aufgaben</h1><table><thead><tr><th>Ingestion</th><th>Relay</th></tr></thead><tbody><tr><td>Kafka-Nachricht empfangen</td><td>Inbox-Zeile sperren</td></tr><tr><td>Inbox oder DLQ dauerhaft speichern</td><td>Handler mit Transaktion ausführen</td></tr><tr><td>Kafka-Offset bestätigen</td><td>Ergebnis speichern und committen</td></tr></tbody></table>`;

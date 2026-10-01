@@ -650,8 +650,8 @@ fn audience_interaction(
                 true,
             );
             format!(
-                "<div class=\"interaction-body\"><h2>{}</h2><p>Choose the correct answer.</p><div id=\"interaction-error\" role=\"alert\"></div>{}</div>",
-                encode_text(question),
+                "<div class=\"interaction-body\">{}<p>Choose the correct answer.</p><div id=\"interaction-error\" role=\"alert\"></div>{}</div>",
+                optional_heading(question.as_deref()),
                 choices
             )
         }
@@ -785,8 +785,8 @@ fn interaction_results(
                 })
                 .collect();
             format!(
-                "<section class=\"interaction-body\"><div class=\"interaction-heading\"><h2>{}</h2><span>{}</span></div>{}</section>",
-                encode_text(question),
+                "<section class=\"interaction-body\"><div class=\"interaction-heading\">{}<span>{}</span></div>{}</section>",
+                optional_heading(question.as_deref()),
                 answer_count_label(answerers),
                 chart(
                     &labels,
@@ -1079,8 +1079,8 @@ fn preview_interaction(spec: &Interaction) -> String {
             participant_color("preview-safe"),
         ),
         Interaction::Quiz { question, options } => format!(
-            "<h2>{}</h2><div class=\"choices\">{}</div>",
-            encode_text(question),
+            "{}<div class=\"choices\">{}</div>",
+            optional_heading(question.as_deref()),
             options
                 .iter()
                 .map(|option| format!(
@@ -1396,6 +1396,98 @@ mod tests {
         assert!(audience.contains("type=\"radio\" name=\"value\""));
         assert!(audience.contains("hx-trigger=\"change\""));
         assert!(results.contains("0 answers"));
+    }
+
+    #[tokio::test]
+    async fn quiz_headings_are_optional_and_escaped_in_all_views() {
+        let pool = crate::store::connect("sqlite::memory:").await.unwrap();
+        let mut session = LiveSession {
+            id: 1,
+            deck_version_id: 1,
+            code: "553675".into(),
+            current_slide: 0,
+            reveal_step: 0,
+            locked: true,
+            interaction_open: true,
+            results_revealed: false,
+            follow_revision: 0,
+            ended_at: None,
+        };
+        let data = LiveData {
+            counts: [("0".to_owned(), 2), ("1".to_owned(), 1)]
+                .into_iter()
+                .collect(),
+            answerers: 3,
+            selected: vec!["1".into()],
+            ..LiveData::default()
+        };
+
+        for (header, heading) in [
+            (":::quiz", None),
+            (":::quiz question=\"\"", None),
+            (":::quiz question=\" \t \"", None),
+            (
+                ":::quiz question=\"  Which <type> & why?  \"",
+                Some("<h2>  Which &lt;type&gt; &amp; why?  </h2>"),
+            ),
+            (
+                ":::quiz question=\"Choose the correct answer\"",
+                Some("<h2>Choose the correct answer</h2>"),
+            ),
+        ] {
+            let document = parse_deck(&format!(
+                "# Which type owns its text?\n\n{header}\n- [x] String\n- [ ] &str\n:::"
+            ))
+            .unwrap();
+            let interaction = document.slides[0].interaction.as_ref().unwrap();
+            session.results_revealed = false;
+            let audience = audience_interaction(&session, 0, interaction, &data);
+            let results = interaction_results(interaction, &data.counts, 3, 0, &[], &[], true);
+            let static_results =
+                interaction_results(interaction, &data.counts, 3, 0, &[], &[], false);
+            let archive = archived_slides(&pool, &session, &document).await.unwrap();
+            for html in [
+                preview(&document, &Theme::default()),
+                printable(&document),
+                audience.clone(),
+                results.clone(),
+                static_results.clone(),
+                archive.clone(),
+            ] {
+                assert_eq!(
+                    html.matches("<h2>").count(),
+                    usize::from(heading.is_some()),
+                    "{header}"
+                );
+                if let Some(heading) = heading {
+                    assert!(html.contains(heading), "{header}");
+                }
+                assert!(!html.contains("<type>"));
+                assert!(html.contains("String"));
+                assert!(html.contains("&amp;str"));
+            }
+            assert!(audience.contains("<p>Choose the correct answer.</p>"));
+            assert!(
+                audience.contains("<legend class=\"visually-hidden\">Choose one answer</legend>")
+            );
+            assert!(audience.contains("type=\"radio\" name=\"value\" value=\"1\" checked"));
+            assert!(audience.contains("hx-trigger=\"change\""));
+            assert!(!audience.contains("✓"));
+            for html in [&results, &static_results, &archive] {
+                assert!(html.contains("✓ String"));
+                assert!(!html.contains("✓ &amp;str"));
+            }
+            assert!(results.contains("3 answers"));
+            assert!(static_results.contains("3 answers"));
+            assert!(static_results.contains("style=\"--value:67%\""));
+            assert!(static_results.contains("style=\"--value:33%\""));
+            assert!(archive.contains("0 answers"));
+            session.results_revealed = true;
+            assert_eq!(
+                audience_interaction(&session, 0, interaction, &data),
+                results
+            );
+        }
     }
 
     #[test]
