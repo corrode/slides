@@ -83,11 +83,27 @@ For local bundle revisions, preserve the existing files and authoring paths. Cha
 - Replace irrelevant boilerplate, setup, and routine error logging with `// ...` or `/* ... */` where valid for the language. Never elide logic needed to understand the bug or establish that the fix works. Mark incomplete snippets as excerpts, not runnable examples; keep any runnable version in a separate supporting file.
 - Keep references available without making them compete with the explanation. Prefer the snippet's IDE link for code navigation. Use brief, descriptive Markdown links for other sources and explain worksheets or homework on a dedicated next-step slide.
 
+### Progressive diagrams and lightweight animation
+
+- Encourage lightweight motion when it helps explain flow direction or draw attention to the relationship being discussed. Mermaid supports animated flowchart edges; use native edge animation sparingly, preferably at a slow pace on one or two relevant connections. Avoid flashing, decorative loops, or animating every edge.
+- Animation is emphasis, not the explanation. Labels, arrows, and structure must communicate the same meaning when static, including in print/PDF. Check reduced-motion behavior when previewing; if motion cannot be reduced where needed, use a static diagram instead. Do not add custom scripts or CSS to bypass the renderer's constraints.
+- For a complex explanation, prefer a short sequence of progressively developed graphs over one large chart. Start with the smallest useful graph, then add one meaningful relationship, component, or failure path per slide. Each slide should answer a distinct question, not merely add another box.
+- Aim for two to four stages when useful, not a long sequence of near-identical slides or a mandatory quota. End with a combined overview only if it remains readable. If the complete graph is still dense, show focused views rather than shrinking it.
+- Keep node IDs, names, direction, and shared structure consistent across stages. Mermaid recalculates layout when a graph changes; matching IDs do not guarantee matching positions. Inspect the rendered sequence for distracting jumps and reorganize or simplify it when needed.
+- Native edge animation does not provide click-to-reveal nodes or smooth transitions between slide diagrams. Slides has no such controls. Use successive slides for diagram stages and `:::reveal` for paragraph/list-item steps; do not invent diagram animation directives.
+- Check optional animation with the same server syntax validation and browser preview as other Mermaid content. The Rust parser may not accept every browser feature. If an animation is rejected or renders poorly, remove the motion and retain the explanation; never bypass validation or claim unverified animation support.
+
 ### Questions and audience participation
 
 - Give a poll or exercise its own slide when it asks the audience to act. Use one question and concise, parallel choices; move the rationale, homework instructions, and other calls to action elsewhere.
 - Ask about a concrete choice the audience is equipped to make. For example, “Which change should we try first?” could offer “Separate persistence from live state,” “Separate metadata from open files,” and “Represent compaction as a plan,” after those alternatives have been explained. Preserve the technical distinction without turning each option into a paragraph.
 - Separate teaching, discussion, and follow-up. Do not end with a general instruction, a second instruction in a blockquote, a worksheet link, and a poll all competing for attention.
+
+### Built-in session features
+
+- Audience questions with upvotes, raised hands, and reactions are built in. They need no Markdown directive and do not use the slide's interaction slot. Put reminders to invite questions in presenter notes instead of inventing `:::questions` or reaction blocks.
+- The presenter can lock audience navigation, recall viewers with **Attention**, and open or close responses. The interaction **Reveal** button shows results; it is separate from `:::reveal` content steps. Do not describe **Home** as attention recall: it resets to the first slide.
+- Headline, body, and code fonts plus background, text, and accent colors are configured in the browser. Do not embed theme metadata or CSS in Markdown. Viewers can switch light/dark appearance, so check readability in both when possible.
 
 ### Speaker notes
 
@@ -111,6 +127,7 @@ Inspect every slide at the intended presentation size when a preview is availabl
 - Are there at most four bullets, each no longer than fifteen words, and only 2-4 relevant code lines per snippet?
 - Does every slide have meaningful speaker notes, with detailed mechanics kept off-screen?
 - Can the audience read every diagram label, code line, table cell, and poll choice without zooming?
+- Do diagram stages introduce meaningful changes without distracting layout jumps, and does any animation clarify the flow while remaining understandable when static?
 - Does every visible element add something, rather than repeat or distract?
 - Does the slide fit comfortably without clipping, awkward wrapping, or tiny content?
 - Can a viewer understand the slide without knowing the authoring conversation?
@@ -148,6 +165,22 @@ The archive contains the **contents** of `my-talk/`, not the parent directory.
 - Polls and ordering exercises need at least two items. Quizzes need at least two options and one marked correct answer. Word clouds have no body. Attribute values use double quotes, with no embedded quote escaping.
 - Keep reference-style link definitions on the slide using them; reference labels are slide-local.
 
+### Tables
+
+Use ordinary Markdown tables for short, meaningful comparisons:
+
+```markdown
+| Ingestion | Relay |
+| --- | --- |
+| Receive a message | Lock an inbox row |
+| Store it durably | Run the handler |
+| Acknowledge the offset | Commit the result |
+```
+
+Slide tables have left-aligned headers and cells by default, comfortable cell padding, and subtle horizontal hairlines. The header rule is slightly stronger; there are no vertical rules or a heavy outer border. Styling adapts to light/dark themes and print, with no custom HTML or CSS needed.
+
+Standard separator alignment remains supported: `:---` for left, `:---:` for center, and `---:` for right. Use default/left alignment for prose; reserve right alignment for comparable numbers. Keep headers short and cells concise. A table is not a general-purpose columns layout. Keep top-level tables outside `:::reveal`; individual rows and cells have no reveal controls. Split a comparison across slides if it needs staged explanation.
+
 ### Incremental reveals
 
 Use `:::reveal` sparingly when revealing a point at a time helps the spoken explanation:
@@ -170,6 +203,19 @@ In live navigation, **Next** reveals before advancing, **Previous** hides steps 
 Editor preview follows the same Next/Previous behavior. In presenter and preview views, use `ArrowRight`, `PageDown`, or `Space` for Next; `ArrowLeft` or `PageUp` for Previous; and `Home` to reset to the first slide at step zero, outside editable fields and interactive controls. Refreshing the same preview slide after edits preserves its step, clamped to the new step count.
 
 Judge density with every step visible. Reveals do not relax the four-bullet limit (including nested bullets), word limits, or one-focus-per-slide guidance. Split an overloaded slide rather than hiding its density behind extra steps.
+
+### Audience interactions
+
+Choose at most one per slide and keep it outside `:::reveal` and `:::notes`. Use the format reference for complete examples and validation rules:
+
+| Directive | Body and options |
+| --- | --- |
+| `:::poll` | At least two top-level `- option` lines. Optional `question="…"`, `multiple`, and `orientation="horizontal"` or `"vertical"` for result bars. Omit `question` when the slide heading already asks it. |
+| `:::quiz` | At least two `- [x] correct` / `- [ ] incorrect` options, with at least one correct answer. Multiple correct answers are supported. Optional `question="…"`. |
+| `:::wordcloud` | Empty body. Optional `prompt="…"` and `max="80"`; `max` controls answer length, not participant count. |
+| `:::ordering` | At least two top-level `- item` lines in their initial order. Optional `prompt="…"`. Participants reorder cards; results show aggregate group order, not automatic correctness grading. |
+
+Close every block with `:::`. Do not add quiz scoring, timers, leaderboards, branching, or extra attributes that are absent from the format reference. Audience questions, hands, and reactions remain available alongside any of these interactions.
 
 ### Code
 
@@ -223,6 +269,15 @@ Reference existing bundle-relative paths:
 - HTML demos must be self-contained and trusted. Bundle their JavaScript, CSS, images, and fonts; resolve dependencies relative to the HTML/CSS file. No CDN dependencies, external fetches, or build/install steps on the server.
 - HTML runs in a sandbox without parent-page access, same-origin privileges, forms, popups, or fetch/WebSocket connections. Do not weaken that sandbox to make a demo work. A frame can navigate itself; sandboxing is not proof that arbitrary content is safe.
 - Presenter notes are excluded from audience rendering. Do not put private material in supporting files: assets can be served or included in audience archives.
+
+### Unsupported features and alternatives
+
+- No native `:::columns` / `:::column`, per-slide layout/background/class attributes, or raw HTML layouts. Use a concise table only for a real comparison; otherwise split the slide. A trusted bundled iframe is an option for an actual interactive demo, not a way to evade slide-density guidance.
+- No code-include line ranges, progressive code-line highlighting, or standalone element/diagram reveal directives. Use separate short excerpts or successive slides; `:::reveal` supports paragraph/list-item steps, not custom animation timing.
+- No frontmatter, multi-file slide composition, or hidden-slide/export directives. Keep slide content in `slides.md`; print and archives show all reveal content together, not one page per step.
+- No upload API operation to publish, start a session, or dry-run a ZIP. Upload creates/replaces a draft; use the presenter UI for publishing and presenting, and report the actual validation performed.
+
+If a request depends on one of these gaps, explain the limitation and propose a supported alternative rather than inventing syntax or changing the application as part of authoring.
 
 ## 4. Package and check
 
