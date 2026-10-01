@@ -155,7 +155,7 @@ impl Drop for AudienceConnection {
         let decremented = self
             .runtime
             .viewers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 count.checked_sub(1)
             })
             .is_ok();
