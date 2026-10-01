@@ -850,6 +850,9 @@ mod tests {
             "# Deck\n:::iframe src=\"https://example.com/a.html\" title=\"X\" :::",
             "# Deck\n```rust code/missing.rs\n```",
             "# Deck\n:::poll\n:::",
+            "# Deck\n:::reveal\n:::",
+            "# Deck\n:::reveal\n## Unsupported heading\n:::",
+            "# Deck\n:::reveal\nUnclosed paragraph",
         ] {
             assert!(
                 run(&[("slides.md", source.as_bytes())]).is_err(),
@@ -859,6 +862,27 @@ mod tests {
         assert!(run(&[("slides.md", &[0xff])]).is_err());
         assert!(run(&[("other.md", b"# Deck")]).is_err());
     }
+    #[test]
+    fn bundle_reveals_survive_asset_rewriting_and_reload() {
+        let source = b"# Deck\n\n:::reveal\nFirst paragraph.\n\n- See [example](code/main.rs).\n- ![Picture][picture]\n:::\n\n[picture]: img.png\n\n:::notes\nPresenter only.\n:::\n";
+        let bundle = run(&[
+            ("slides.md", source),
+            ("code/main.rs", b"fn main() {}"),
+            ("img.png", b"image"),
+        ])
+        .unwrap();
+        let deck = crate::markdown::parse_deck(&bundle.source).unwrap();
+        let slide = &deck.slides[0];
+        assert_eq!(slide.reveal_count, 3);
+        assert_eq!(
+            slide.html_at_step(1).matches("data-reveal-pending").count(),
+            2
+        );
+        assert!(slide.html.contains("/assets/"));
+        assert!(!slide.html.contains("Presenter only"));
+        assert!(slide.notes.as_ref().unwrap().contains("Presenter only"));
+    }
+
     #[test]
     fn allows_remote_navigation_and_ignores_code_literals() {
         let bundle = run(&[("slides.md",b"# Deck\n[site](https://example.com)\n\n```md\n![x](missing.png)\n:::iframe src=\"missing.html\" title=\"X\" :::\n```\n")]).unwrap();

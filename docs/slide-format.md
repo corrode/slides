@@ -53,7 +53,7 @@ A subsequent complete ZIP replaces the draft content and title, including browse
 
 A deck is UTF-8 Markdown containing one or more slides. Each slide contains:
 
-1. Markdown content;
+1. Markdown content, optionally including reveal blocks;
 2. zero or more local iframe blocks;
 3. at most one interaction block; and
 4. at most one presenter notes block.
@@ -92,6 +92,61 @@ The content parser supports CommonMark plus:
 - fenced and indented code blocks.
 
 The first token after a fenced-code marker is used as the syntax name. Unknown syntax names fall back to plain text. Fenced `mermaid` blocks render as diagrams as described below. On interactive pages, fenced `rust` and `rs` blocks get a **Run** control. The server forwards that block's source to the stable Rust 2024 toolchain at `play.rust-lang.org`; code runs in the official Playground sandbox, never in the Slides process. Print/PDF output and offline session archives contain highlighted code without the **Run** control.
+
+### Incremental reveals
+
+Use `:::reveal` to show paragraphs or list items one step at a time during a presentation. Keep the heading and any always-visible context outside the block:
+
+```markdown
+# Make ownership explicit
+
+:::reveal
+Each value has an owner.
+
+- Moving a value transfers ownership.
+  - The previous binding can no longer be used.
+- Borrowing leaves ownership unchanged.
+:::
+```
+
+This example has three steps: the paragraph, the first bullet together with its nested bullet, and the second bullet. The heading is visible from the start.
+
+#### Syntax and step order
+
+- Put the exact, lowercase `:::reveal` opening marker on its own line and close it with `:::` on its own line. No attributes, flags, or inline body are accepted; `:::reveal :::` is not a self-closing form. Marker lines may have up to three leading spaces and trailing whitespace. Do not indent them as code.
+- A block must contain at least one top-level paragraph or list item. Blank blocks and blocks containing only reference-link definitions are invalid.
+- Each top-level paragraph is one step. Separate paragraphs with a blank line; line breaks within a paragraph do not create additional steps.
+- Each item in a top-level unordered, ordered, or task list is one step. List marker choice and ordered-list starting numbers do not change reveal order.
+- All nested content belongs to its parent item: nested lists, additional paragraphs in a loose list item, and properly indented Markdown such as code or Mermaid fences appear together, not as separate steps. Ordinary Markdown rendering and sanitization rules still apply.
+- Multiple reveal blocks on one slide share one sequential step order, following source order. Numbering restarts on each slide. Content outside reveal blocks is always visible, even when it follows a reveal block.
+- Reference links remain slide-local and can use definitions inside or outside a reveal block. Definitions do not create steps.
+
+#### Restrictions and validation
+
+Reveal blocks must be top-level slide content, not nested in lists, blockquotes, or other directive blocks. Their top-level content is limited to paragraphs and lists: headings, fenced or indented code blocks (including standalone Mermaid), tables, blockquotes, thematic breaks, and raw HTML blocks are rejected. Move these outside the block; do not wrap extra material in a list merely to make a dense slide pass validation.
+
+Do not nest reveal blocks or put other directives inside them. Notes, iframes, and interactions can coexist on the same slide but must remain outside `:::reveal`. Reveal blocks do not count toward the one-interaction-per-slide limit.
+
+An actual `:::reveal` directive in presenter notes is rejected. To discuss its syntax in notes or slide content, put the example in a fenced code block: markers inside fenced or indented code remain literal code, not directives. Presenter notes never acquire reveal steps.
+
+An unsupported body, empty block, nested directive, opening arguments, or missing closing `:::` makes the deck invalid. Errors identify the one-based slide number. A reveal block cannot span slides; `---` outside a code fence still starts a new slide, so close the reveal block first.
+
+#### Navigation, audience views, and exports
+
+In a live session, entering a slide with **Next** starts at step zero, with all its reveal content pending:
+
+- **Next** shows one more step before advancing to the next slide. On the last slide, it still reveals all remaining steps before becoming unavailable.
+- **Previous** hides the most recently shown step. At step zero, it moves to the preceding slide with all that slide's reveal content shown.
+- **First** returns to the first slide at step zero, including when already on that slide.
+- Slides without reveals retain ordinary slide-by-slide navigation.
+
+Editor preview uses the same **Next** and **Previous** behavior. Both presenter and preview views accept `ArrowRight`, `PageDown`, or `Space` for Next; `ArrowLeft` or `PageUp` for Previous; and `Home` for First, resetting to the first slide at step zero. These shortcuts apply outside editable fields and interactive controls. When edits refresh the same preview slide, its reveal step is preserved and clamped to the new step count.
+
+Audience members viewing the current live slide stay synchronized with the presenter's reveal step. Browsing another, historical slide shows all of that slide's content; a reveal-only update does not pull those viewers back to the current slide. Returning to the current slide uses its current live step. Reveal navigation is separate from the interaction **Reveal** control for showing poll or quiz results; stepping within a slide does not reset the interaction.
+
+Full-content rendering, print/PDF output, and downloadable session archives show every reveal step together, even if the session ended partway through a reveal. They do not produce one page per step. Presenter notes remain excluded from audience views and exports. Reveals control pacing, not access: pending content is already present in the rendered HTML and must not be treated as secret.
+
+Use reveals sparingly when pacing helps the explanation. The fully revealed slide must still be concise and readable; revealing content gradually is not a reason to add more of it.
 
 ### Referenced code files
 
@@ -198,7 +253,7 @@ Explain why the borrow ends before the next statement.
 :::
 ```
 
-A slide may contain at most one notes block. The opening line accepts no attributes or flags. Notes markers inside code fences remain code. Presenter notes appear in a collapsible panel in the live presenter view and are excluded from the audience view, editor preview, print/PDF output, and final session archive.
+A slide may contain at most one notes block. The opening line accepts no attributes or flags. Notes markers inside code fences remain code. Notes never participate in incremental reveals: `:::reveal` directives inside notes are invalid, though fenced code examples of the syntax are allowed. Presenter notes appear in a collapsible panel in the live presenter view and are excluded from the audience view, editor preview, print/PDF output, and final session archive.
 
 ## Interaction blocks
 
@@ -342,7 +397,7 @@ fn consume(value: String) {
 
 ## Validation and compatibility
 
-Malformed supported interaction blocks make the deck invalid. Validation errors identify the one-based slide number. Unknown Markdown remains ordinary content unless a future format revision assigns it presentation semantics.
+Malformed supported directive blocks, including reveals and interactions, make the deck invalid. Validation errors identify the one-based slide number. Unknown Markdown remains ordinary content unless a future format revision assigns it presentation semantics.
 
 Changes that alter the meaning of valid v1 source require a new format version. Additive parser changes must not reinterpret ordinary Markdown constructs such as headings, list marker choice, image alt text, or HTML comments.
 
@@ -351,7 +406,6 @@ Changes that alter the meaning of valid v1 source require a new format version. 
 The following syntax is reserved for design work and is **not implemented in v1**:
 
 - global deck metadata with an explicit format version;
-- `:::steps` for incremental reveals;
 - `:::columns` and `:::column` for constrained layouts;
 - per-slide attributes for IDs, layouts, backgrounds, and classes;
 - code-fence attributes for line numbers and progressive highlighting;
@@ -374,7 +428,7 @@ export:
 
 # Build pipeline
 
-:::steps
+:::reveal
 - Parse Markdown
 - Validate directives and assets
 - Render deterministic output
@@ -385,7 +439,7 @@ Explain why deterministic export policy belongs in the document model.
 :::
 ````
 
-The metadata, slide attributes, and `:::steps` syntax in this example are illustrative and must not be used in a v1 deck. The `:::notes` block is valid v1 syntax.
+The metadata and slide attributes in this example are illustrative and must not be used in a v1 deck. The `:::reveal` and `:::notes` blocks are valid v1 syntax. Use `:::reveal` for incremental content; the previously proposed `:::steps` spelling is not supported.
 
 ## Research notes
 

@@ -143,10 +143,33 @@ The archive contains the **contents** of `my-talk/`, not the parent directory.
 - Use `---` on its own line between slides. Do not add leading or trailing separators.
 - No frontmatter, `bundle.json`, theme metadata, or multi-file deck composition. Additional Markdown files are supporting material, not automatically included slides.
 - Use CommonMark with tables, strikethrough, task lists, and fenced code. Raw HTML in Markdown is not a layout mechanism.
-- Do not invent columns, reveal markers, slide classes, or background directives. New imports use the app's default theme. Every draft's theme is browser editable; replacement preserves the deck's existing theme.
+- Do not invent columns, slide classes, or background directives. New imports use the app's default theme. Every draft's theme is browser editable; replacement preserves the deck's existing theme.
 - Include exactly one `:::notes` block and at most one interaction per slide. Close directive blocks with `:::` and consult the format reference for exact attributes.
 - Polls and ordering exercises need at least two items. Quizzes need at least two options and one marked correct answer. Word clouds have no body. Attribute values use double quotes, with no embedded quote escaping.
 - Keep reference-style link definitions on the slide using them; reference labels are slide-local.
+
+### Incremental reveals
+
+Use `:::reveal` sparingly when revealing a point at a time helps the spoken explanation:
+
+```markdown
+:::reveal
+Each value has an owner.
+
+- Moving transfers ownership.
+- Borrowing leaves ownership unchanged.
+:::
+```
+
+Each top-level paragraph or list item is one step. Nested lists and other Markdown content within an item appear with that parent, not as separate steps. Multiple reveal blocks continue one sequence per slide. Keep headings and always-visible context outside the blocks.
+
+The opening marker takes no arguments, and the closing `:::` must be on its own line. Only paragraphs and lists are supported at the top level of a reveal block. Empty, unclosed, or nested blocks are invalid. Keep notes, iframes, and interactions outside reveals; actual reveal directives in notes are rejected (fenced code examples are fine). Consult the format reference for the full rules.
+
+In live navigation, **Next** reveals before advancing, **Previous** hides steps before returning to the prior slide fully shown, and **First** resets to the first slide at step zero. Audience members on the current slide follow the presenter's step. Historical slides, full-content rendering, print/PDF, and session archives show all reveal content. Pending content is already in the HTML, not private.
+
+Editor preview follows the same Next/Previous behavior. In presenter and preview views, use `ArrowRight`, `PageDown`, or `Space` for Next; `ArrowLeft` or `PageUp` for Previous; and `Home` to reset to the first slide at step zero, outside editable fields and interactive controls. Refreshing the same preview slide after edits preserves its step, clamped to the new step count.
+
+Judge density with every step visible. Reveals do not relax the four-bullet limit (including nested bullets), word limits, or one-focus-per-slide guidance. Split an overloaded slide rather than hiding its density behind extra steps.
 
 ### Code
 

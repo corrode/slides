@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use anyhow::Result;
 use html_escape::{encode_double_quoted_attribute, encode_text};
@@ -132,19 +132,27 @@ pub fn preview(document: &DeckDocument, theme: &Theme) -> String {
             let active = if index == 0 { " active" } else { "" };
             let current = if index == 0 { "true" } else { "false" };
             format!(
-                "<article class=\"slide{active}\" data-preview-slide aria-current=\"{current}\" aria-label=\"Slide {}\"><div class=\"slide-content\">{body}</div></article>",
+                "<article class=\"slide{active}\" data-preview-slide data-reveal-count=\"{}\" aria-current=\"{current}\" aria-label=\"Slide {}\"><div class=\"slide-content\">{body}</div></article>",
+                slide.reveal_count,
                 index + 1
             )
         })
         .collect::<String>();
-    let next_disabled = if document.slides.len() == 1 {
+    let reveal_count = document.slides[0].reveal_count;
+    let reveal_hidden = if reveal_count == 0 { " hidden" } else { "" };
+    let reveal_label = if reveal_count == 0 {
+        String::new()
+    } else {
+        format!("Step 0 of {reveal_count}")
+    };
+    let next_disabled = if document.slides.len() == 1 && reveal_count == 0 {
         " disabled"
     } else {
         ""
     };
 
     format!(
-        "<div class=\"editor-preview\" data-preview-deck data-presentation-theme data-slide-index=\"0\" style=\"{}\"><div class=\"slide-stage\">{slides}</div><nav class=\"preview-navigation\" aria-label=\"Preview slide navigation\"><button class=\"secondary\" type=\"button\" data-preview-nav=\"previous\" disabled>{}Previous</button><span class=\"preview-position\" data-preview-position aria-live=\"polite\">Slide 1 of {total}</span><button class=\"secondary\" type=\"button\" data-preview-nav=\"next\"{next_disabled}>Next{}</button></nav></div>",
+        "<div class=\"editor-preview\" data-preview-deck data-presentation-theme data-slide-index=\"0\" style=\"{}\"><div class=\"slide-stage\">{slides}</div><nav class=\"preview-navigation\" aria-label=\"Preview slide navigation\"><button class=\"secondary\" type=\"button\" data-preview-nav=\"previous\" disabled>{}Previous</button><span class=\"preview-position\" aria-live=\"polite\"><span data-preview-position>Slide 1 of {total}</span><span data-preview-reveal-position{reveal_hidden}>{reveal_label}</span></span><button class=\"secondary\" type=\"button\" data-preview-nav=\"next\"{next_disabled}>Next{}</button></nav></div>",
         encode_double_quoted_attribute(&theme.style()),
         icon("previous"),
         icon("next"),
@@ -285,9 +293,16 @@ fn presenter_view(
     index: usize,
     data: &LiveData,
 ) -> String {
-    let first_disabled = if index == 0 { " disabled" } else { "" };
+    let reveal_count = slide.reveal_count;
+    let reveal_step = live_reveal_step(session, slide);
+    let reveal_position = reveal_position(reveal_step, reveal_count);
+    let first_disabled = if index == 0 && reveal_step == 0 {
+        " disabled"
+    } else {
+        ""
+    };
     let previous_disabled = first_disabled;
-    let next_disabled = if index + 1 >= document.slides.len() {
+    let next_disabled = if index + 1 >= document.slides.len() && reveal_step == reveal_count {
         " disabled"
     } else {
         ""
@@ -341,7 +356,7 @@ fn presenter_view(
     let questions = presenter_questions(&session.code, &data.questions);
 
     format!(
-        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\"><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span></div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{questions}{notes}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" {navigation_request}{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" {navigation_request}{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" {navigation_request}>{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" {navigation_request}{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
+        "<main id=\"live-view\" class=\"presenter-shell\" data-slide-index=\"{index}\" data-reveal-step=\"{reveal_step}\" data-reveal-count=\"{reveal_count}\"><nav class=\"presenter-toolbar\" aria-label=\"Presentation controls\"><div class=\"presenter-status\"><a class=\"brand\" href=\"/admin\">Slides</a>{live_status}<strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{total}</span>{reveal_position}</div><div class=\"presenter-share\"><span class=\"share-code\"><span>Join code</span><strong>{code}</strong></span><button class=\"secondary small\" type=\"button\" data-share-url=\"/join/{code}\">{share_icon}Copy link</button><span id=\"share-status\" class=\"share-status\" role=\"status\"></span></div><div class=\"presenter-actions\">{color_scheme_toggle}<a class=\"button secondary small\" href=\"/admin/decks/{deck_slug}/edit\" target=\"_blank\" rel=\"noopener\" title=\"Edit presentation in a new tab\">{edit_icon}Edit</a><button class=\"secondary small\" hx-post=\"/sessions/{code}/lock\" hx-swap=\"none\" hx-disable=\"this\">{lock_icon_markup}{lock_label}</button>{interaction_controls}<form class=\"inline-form\" method=\"post\" action=\"/sessions/{code}/end\" data-confirm=\"End this live session?\"><button class=\"danger small\" type=\"submit\">{end_icon}End</button></form></div></nav><div class=\"slide-stage\"><article class=\"slide active\" aria-label=\"Slide {position} of {total}\"><div class=\"slide-content\">{slide_html}{interaction}<div class=\"presenter-reactions\">{reactions}</div></div></article></div>{questions}{notes}<nav class=\"presentation-navigation\" aria-label=\"Slide navigation\"><button class=\"secondary\" data-nav=\"first\" title=\"Jump to first slide\" hx-post=\"/sessions/{code}/first\" hx-swap=\"none\" {navigation_request}{first_disabled}>{first_icon}First</button><button class=\"secondary\" data-nav=\"previous\" hx-post=\"/sessions/{code}/previous\" hx-swap=\"none\" {navigation_request}{previous_disabled}>{previous_icon}Previous</button><button class=\"attention-control\" data-nav=\"current\" hx-post=\"/sessions/{code}/attention\" hx-swap=\"none\" {navigation_request}>{attention_icon}Attention</button><button class=\"secondary\" data-nav=\"next\" hx-post=\"/sessions/{code}/next\" hx-swap=\"none\" {navigation_request}{next_disabled}>Next{next_icon}</button></nav>{hand_signal}</main>",
         title = encode_text(&version.title),
         position = index + 1,
         total = document.slides.len(),
@@ -351,7 +366,7 @@ fn presenter_view(
         edit_icon = icon("edit"),
         lock_icon_markup = icon(lock_icon),
         end_icon = icon("end"),
-        slide_html = slide.html,
+        slide_html = slide.html_at_step(reveal_step),
         reactions = reaction_buttons(&session.code, index, &data.reactions, false),
         navigation_request = NAVIGATION_REQUEST_ATTRIBUTES,
         first_icon = icon("first"),
@@ -377,18 +392,46 @@ fn audience_view(
         .unwrap_or_default();
     let reactions = reaction_buttons(&session.code, index, &data.reactions, true);
     let navigation = audience_navigation(session, index, slide_count);
-    let following_presenter = index == session.current_slide as usize;
+    let current = (session.current_slide as usize).min(slide_count.saturating_sub(1));
+    let following_presenter = index == current;
+    let reveal_count = slide.reveal_count;
+    let reveal_step = if following_presenter {
+        live_reveal_step(session, slide)
+    } else {
+        reveal_count
+    };
+    let slide_html = if following_presenter {
+        slide.html_at_step(reveal_step)
+    } else {
+        Cow::Borrowed(slide.html.as_str())
+    };
+    let reveal_position = reveal_position(reveal_step, reveal_count);
     let live_status = live_status(data.viewers);
     let questions = audience_questions(&session.code, &data.questions);
     format!(
-        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\"><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span></div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\" aria-label=\"Slide {position} of {slide_count}\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
+        "<main id=\"live-view\" class=\"audience-shell\" data-follow-url=\"/join/{code}\" data-following-presenter=\"{following_presenter}\" data-slide-index=\"{index}\" data-reveal-step=\"{reveal_step}\" data-reveal-count=\"{reveal_count}\"><nav class=\"audience-toolbar\" aria-label=\"Presentation status\"><div class=\"audience-status\"><a class=\"brand\" href=\"/\">Slides</a><strong class=\"nav-title\">{title}</strong><span class=\"nav-position\">{position}/{slide_count}</span>{reveal_position}</div><div class=\"audience-toolbar-actions\">{live_status}{color_scheme_toggle}</div></nav><section class=\"interaction audience-slide\" aria-label=\"Slide {position} of {slide_count}\"><div class=\"slide-content audience-slide-content\">{slide_html}</div>{interaction}</section>{questions}<div class=\"audience-actions\">{hand_button}{reactions}</div>{navigation}</main>",
         code = session.code,
         title = encode_text(title),
         position = index + 1,
-        slide_html = slide.html,
         hand_button = audience_hand_button(&session.code, data.hand_raised),
         color_scheme_toggle = color_scheme_toggle(),
     )
+}
+
+fn live_reveal_step(session: &LiveSession, slide: &Slide) -> usize {
+    usize::try_from(session.reveal_step)
+        .unwrap_or_default()
+        .min(slide.reveal_count)
+}
+
+fn reveal_position(step: usize, count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(
+            "<span class=\"nav-position\" data-reveal-position aria-live=\"polite\">Step {step} of {count}</span>"
+        )
+    }
 }
 
 fn live_status(viewers: u64) -> String {
@@ -1080,6 +1123,190 @@ mod tests {
         ["First", "Second", "Third"].map(str::to_owned).to_vec()
     }
 
+    fn reveal_fixture() -> (crate::markdown::DeckDocument, DeckVersion, LiveSession) {
+        let source = "# Reveals\n\nAlways visible.\n\n:::reveal\nFirst paragraph.\n\n- Second step\n- Third step\n:::\n";
+        let document = parse_deck(source).unwrap();
+        assert_eq!(document.slides[0].reveal_count, 3);
+        let version = DeckVersion {
+            title: "Reveal deck".into(),
+            source: source.into(),
+            theme_headline_font: DEFAULT_HEADLINE_FONT.into(),
+            theme_text_font: DEFAULT_TEXT_FONT.into(),
+            theme_code_font: DEFAULT_CODE_FONT.into(),
+            theme_background: DEFAULT_THEME_BACKGROUND.into(),
+            theme_text: DEFAULT_THEME_TEXT.into(),
+            theme_accent: DEFAULT_THEME_ACCENT.into(),
+        };
+        let session = LiveSession {
+            id: 1,
+            deck_version_id: 1,
+            code: "553675".into(),
+            current_slide: 0,
+            reveal_step: 0,
+            locked: true,
+            interaction_open: false,
+            results_revealed: false,
+            follow_revision: 0,
+            ended_at: None,
+        };
+        (document, version, session)
+    }
+
+    fn assert_all_reveals_visible(html: &str) {
+        for step in 1..=3 {
+            assert!(html.contains(&format!("data-reveal-step=\"{step}\"")));
+        }
+        assert!(html.contains("First paragraph."));
+        assert!(html.contains("Second step"));
+        assert!(html.contains("Third step"));
+        assert!(!html.contains("data-reveal-pending"));
+        assert!(!html.contains(" inert"));
+        assert!(!html.contains("aria-hidden=\"true\""));
+    }
+
+    #[test]
+    fn current_live_views_share_clamped_reveal_visibility_and_boundary_controls() {
+        let (document, version, mut session) = reveal_fixture();
+        let slide = &document.slides[0];
+        let data = LiveData::default();
+        for (stored, step) in [
+            (-1, 0),
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 3),
+            (i64::MAX, 3),
+        ] {
+            session.reveal_step = stored;
+            let presenter = presenter_view(
+                &session,
+                &version,
+                "reveal-deck",
+                &document,
+                slide,
+                0,
+                &data,
+            );
+            let audience = audience_view(&session, &version.title, slide, 0, 1, &data);
+            let expected = slide.html_at_step(step);
+            for html in [&presenter, &audience] {
+                let root = html.split('>').next().unwrap();
+                assert!(root.contains(&format!("data-reveal-step=\"{step}\"")));
+                assert!(root.contains("data-reveal-count=\"3\""));
+                assert!(html.contains(expected.as_ref()));
+                assert!(html.contains("<p>Always visible.</p>"));
+                assert_eq!(html.matches("data-reveal-pending").count(), 3 - step);
+                for tag in html
+                    .split('>')
+                    .filter(|tag| tag.contains("data-reveal-pending"))
+                {
+                    assert!(tag.contains("aria-hidden=\"true\""));
+                    assert!(tag.contains(" inert"));
+                }
+                assert!(html.contains(&format!(
+                    "data-reveal-position aria-live=\"polite\">Step {step} of 3</span>"
+                )));
+            }
+            assert!(audience.contains("data-following-presenter=\"true\""));
+            for (action, disabled) in [
+                ("first", step == 0),
+                ("previous", step == 0),
+                ("next", step == 3),
+            ] {
+                let marker = format!("data-nav=\"{action}\"");
+                let control = presenter
+                    .split_once(&marker)
+                    .unwrap()
+                    .1
+                    .split('>')
+                    .next()
+                    .unwrap();
+                assert_eq!(
+                    control.ends_with(" disabled"),
+                    disabled,
+                    "{action}, step {step}"
+                );
+                assert!(control.contains(&format!("hx-post=\"/sessions/553675/{action}\"")));
+                assert!(control.contains(super::NAVIGATION_REQUEST_ATTRIBUTES));
+            }
+        }
+    }
+
+    #[test]
+    fn noncurrent_audience_slides_show_all_reveals() {
+        let (_, version, mut session) = reveal_fixture();
+        let document = parse_deck(&format!(
+            "{}\n---\n{}\n---\n{}",
+            version.source, version.source, version.source
+        ))
+        .unwrap();
+        session.current_slide = 1;
+        session.reveal_step = 1;
+        session.locked = false;
+        for index in [0, 2] {
+            let slide = &document.slides[index];
+            let html = audience_view(
+                &session,
+                &version.title,
+                slide,
+                index,
+                3,
+                &LiveData::default(),
+            );
+            let root = html.split('>').next().unwrap();
+            assert!(root.contains("data-following-presenter=\"false\""));
+            assert!(root.contains("data-reveal-step=\"3\" data-reveal-count=\"3\""));
+            assert!(html.contains(&format!(">{}</div>", slide.html)));
+            assert!(!html.contains("data-reveal-pending"));
+            assert!(!html.contains(" inert"));
+            assert!(html.contains("Step 3 of 3</span>"));
+        }
+    }
+
+    #[test]
+    fn printable_keeps_all_reveals_visible() {
+        let (document, _, _) = reveal_fixture();
+        let html = printable(&document);
+        assert!(html.contains(&document.slides[0].html));
+        assert_all_reveals_visible(&html);
+    }
+
+    #[tokio::test]
+    async fn archive_keeps_all_reveals_visible_even_when_session_ended_mid_reveal() {
+        let pool = crate::store::connect("sqlite::memory:").await.unwrap();
+        let (document, _, mut session) = reveal_fixture();
+        session.reveal_step = 1;
+        session.ended_at = Some(1);
+        let html = archived_slides(&pool, &session, &document).await.unwrap();
+        assert!(html.contains(&document.slides[0].html));
+        assert_all_reveals_visible(&html);
+    }
+
+    #[test]
+    fn preview_exposes_reveal_counts_and_leaves_initialization_to_javascript() {
+        let (document, _, _) = reveal_fixture();
+        let html = preview(&document, &Theme::default());
+        assert!(html.contains("data-preview-slide data-reveal-count=\"3\""));
+        assert!(html.contains(&document.slides[0].html));
+        assert!(!html.contains("data-reveal-pending"));
+        assert!(!html.contains(" inert"));
+        assert!(html.contains("data-preview-nav=\"previous\" disabled"));
+        assert!(html.contains("data-preview-nav=\"next\">"));
+        let (slides, navigation) = html
+            .split_once("<nav class=\"preview-navigation\"")
+            .unwrap();
+        assert!(!slides.contains("data-preview-reveal-position"));
+        assert!(navigation.contains("class=\"preview-position\" aria-live=\"polite\""));
+        assert!(navigation.contains("data-preview-reveal-position>Step 0 of 3</span></span>"));
+
+        let plain = parse_deck("# No reveals").unwrap();
+        let html = preview(&plain, &Theme::default());
+        assert!(html.contains("data-preview-slide data-reveal-count=\"0\""));
+        assert!(html.contains("data-preview-nav=\"next\" disabled"));
+        assert!(html.contains("data-preview-reveal-position hidden></span></span>"));
+    }
+
     #[test]
     fn printable_contains_every_slide_without_navigation_or_notes() {
         let document = parse_deck(
@@ -1124,6 +1351,7 @@ mod tests {
             deck_version_id: 1,
             code: "553675".into(),
             current_slide: 0,
+            reveal_step: 0,
             locked: true,
             interaction_open: false,
             results_revealed: false,
@@ -1146,6 +1374,7 @@ mod tests {
             deck_version_id: 1,
             code: "553675".into(),
             current_slide: 0,
+            reveal_step: 0,
             locked: true,
             interaction_open: true,
             results_revealed: false,
@@ -1251,6 +1480,7 @@ mod tests {
             deck_version_id: 1,
             code: "553675".into(),
             current_slide: 0,
+            reveal_step: 0,
             locked: true,
             interaction_open: true,
             results_revealed: false,
@@ -1296,6 +1526,14 @@ mod tests {
             }
         };
         assert_navigation(&presenter, &["first", "previous"]);
+        assert!(!presenter.contains("data-reveal-position"));
+        assert!(
+            presenter
+                .split('>')
+                .next()
+                .unwrap()
+                .contains("data-reveal-step=\"0\" data-reveal-count=\"0\"")
+        );
         // Other mutations retain their existing request-driven disabling.
         assert!(
             presenter
@@ -1331,6 +1569,14 @@ mod tests {
         assert!(audience.contains("class=\"nav-title\">A useful deck"));
         assert!(audience.contains("class=\"nav-position\">1/2"));
         assert!(!audience.contains("Join code"));
+        assert!(!audience.contains("data-reveal-position"));
+        assert!(
+            audience
+                .split('>')
+                .next()
+                .unwrap()
+                .contains("data-reveal-step=\"0\" data-reveal-count=\"0\"")
+        );
         assert!(audience.contains("Live · 3 viewers"));
         assert!(audience.contains("data-color-scheme-toggle"));
         assert!(audience.contains("aria-keyshortcuts=\"Alt+H\""));

@@ -114,6 +114,7 @@ pub struct QuestionActionForm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionMarker {
     slide: i64,
+    reveal_step: i64,
     follow_revision: i64,
     ended_at: Option<i64>,
 }
@@ -122,6 +123,7 @@ impl From<&LiveSession> for SessionMarker {
     fn from(session: &LiveSession) -> Self {
         Self {
             slide: session.current_slide,
+            reveal_step: session.reveal_step,
             follow_revision: session.follow_revision,
             ended_at: session.ended_at,
         }
@@ -310,9 +312,9 @@ pub async fn events(
             loop {
                 tokio::select! {
                     update = updates.recv() => match update {
-                        Ok(LiveUpdate::Content) => break,
-                        Ok(LiveUpdate::SlideChanged | LiveUpdate::Attention)
-                        | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        Ok(LiveUpdate::Content)
+                        | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        Ok(LiveUpdate::SlideChanged | LiveUpdate::Attention) => {
                             requested_slide = None;
                             break;
                         }
@@ -368,7 +370,7 @@ pub async fn first(
     Path(code): Path<String>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
-    mutate_position(&state, &code, |_, _| 0).await?;
+    mutate_position(&state, &code, |_, _, _| (0, 0)).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -378,7 +380,17 @@ pub async fn previous(
     Path(code): Path<String>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
-    mutate_position(&state, &code, |current, _| current.saturating_sub(1)).await?;
+    mutate_position(&state, &code, |current, step, document| {
+        if step > 0 {
+            (current, step - 1)
+        } else if current > 0 {
+            let previous = current - 1;
+            (previous, document.slides[previous].reveal_count)
+        } else {
+            (0, 0)
+        }
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -388,8 +400,14 @@ pub async fn next(
     Path(code): Path<String>,
 ) -> AppResult<Response> {
     require_admin(&jar, &state)?;
-    mutate_position(&state, &code, |current, len| {
-        (current + 1).min(len.saturating_sub(1))
+    mutate_position(&state, &code, |current, step, document| {
+        if step < document.slides[current].reveal_count {
+            (current, step + 1)
+        } else if current + 1 < document.slides.len() {
+            (current + 1, 0)
+        } else {
+            (current, step)
+        }
     })
     .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -786,7 +804,7 @@ async fn ensure_session_artifact(
 async fn mutate_position(
     state: &AppState,
     code: &str,
-    update: impl FnOnce(usize, usize) -> usize,
+    update: impl FnOnce(usize, usize, &DeckDocument) -> (usize, usize),
 ) -> AppResult<()> {
     let session = required_session(state, code).await?;
     if session.ended_at.is_some() {
@@ -801,12 +819,19 @@ async fn mutate_position(
         return Err(AppError::bad_request("This presentation has ended."));
     }
     let current = session.current_slide as usize;
-    let target = update(current, deck.document.slides.len());
-    if target == current {
+    let step = session.reveal_step as usize;
+    let (target, target_step) = update(current, step, &deck.document);
+    if (target, target_step) == (current, step) {
         return Ok(());
     }
-    store::move_to_slide(&state.pool, session.id, target).await?;
-    state.hub.notify(session.id, LiveUpdate::SlideChanged).await;
+    let update = if target == current {
+        store::set_reveal_step(&state.pool, session.id, target_step).await?;
+        LiveUpdate::Content
+    } else {
+        store::move_to_position(&state.pool, session.id, target, target_step).await?;
+        LiveUpdate::SlideChanged
+    };
+    state.hub.notify(session.id, update).await;
     Ok(())
 }
 
@@ -987,6 +1012,285 @@ mod tests {
             embed_dir: directory.path().join("embeds"),
         };
         (directory, state, session)
+    }
+
+    const REVEAL_DECK: &str = "# First\n\n:::reveal\n- First item\n- Second item\n:::\n\n---\n\n# Second\n\n:::reveal\nLast paragraph.\n:::";
+
+    async fn navigate(state: &AppState, code: &str, action: &str) -> LiveSession {
+        let response = super::super::router(state.clone())
+            .oneshot(
+                Request::post(format!("/sessions/{code}/{action}"))
+                    .header(
+                        header::COOKIE,
+                        format!("slides_admin={}", state.admin_cookie),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        required_session(state, code).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn reveal_navigation_preserves_interactions_and_only_moves_after_the_last_step() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        assert_eq!(session.reveal_step, 0);
+        let runtime = state.hub.runtime(&state.pool, session.id).await.unwrap();
+        let mut updates = runtime.subscribe();
+        let mut before = session.clone();
+        for (action, slide, step) in [
+            ("previous", 0, 0),
+            ("first", 0, 0),
+            ("next", 0, 1),
+            ("next", 0, 2),
+            ("next", 1, 0),
+            ("next", 1, 1),
+            ("next", 1, 1),
+            ("previous", 1, 0),
+            ("previous", 0, 2),
+            ("previous", 0, 1),
+            ("previous", 0, 0),
+            ("next", 0, 1),
+            ("first", 0, 0),
+            ("next", 0, 1),
+            ("next", 0, 2),
+            ("next", 1, 0),
+            ("first", 0, 0),
+        ] {
+            store::set_interaction_state(&state.pool, session.id, false, true)
+                .await
+                .unwrap();
+            let revision = runtime.revision();
+            let after = navigate(&state, &session.code, action).await;
+            assert_eq!(
+                (after.current_slide, after.reveal_step),
+                (slide, step),
+                "{action}"
+            );
+            let moved = slide != before.current_slide;
+            let changed = moved || step != before.reveal_step;
+            assert_eq!(after.interaction_open, moved, "{action}");
+            assert_eq!(after.results_revealed, !moved, "{action}");
+            assert_eq!(
+                after.follow_revision,
+                before.follow_revision + i64::from(moved)
+            );
+            assert_eq!(runtime.revision(), revision + u64::from(changed));
+            if changed {
+                assert_eq!(
+                    updates.try_recv().unwrap(),
+                    if moved {
+                        LiveUpdate::SlideChanged
+                    } else {
+                        LiveUpdate::Content
+                    }
+                );
+            }
+            assert!(matches!(
+                updates.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+            before = after;
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_next_requests_advance_each_reveal_once() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        let runtime = state.hub.runtime(&state.pool, session.id).await.unwrap();
+        tokio::join!(
+            navigate(&state, &session.code, "next"),
+            navigate(&state, &session.code, "next"),
+            navigate(&state, &session.code, "next"),
+        );
+        let after = required_session(&state, &session.code).await.unwrap();
+        assert_eq!((after.current_slide, after.reveal_step), (1, 0));
+        assert_eq!(after.follow_revision, 1);
+        assert_eq!(runtime.revision(), 3);
+    }
+
+    #[tokio::test]
+    async fn reveal_navigation_requires_authentication_and_rejects_ended_sessions() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        navigate(&state, &session.code, "next").await;
+        let runtime = state.hub.runtime(&state.pool, session.id).await.unwrap();
+        let revision = runtime.revision();
+        for ended in [false, true] {
+            if ended {
+                store::end_session(&state.pool, session.id, store::now_millis())
+                    .await
+                    .unwrap();
+            }
+            for action in ["first", "previous", "next"] {
+                let mut request = Request::post(format!("/sessions/{}/{action}", session.code));
+                if ended {
+                    request = request.header(
+                        header::COOKIE,
+                        format!("slides_admin={}", state.admin_cookie),
+                    );
+                }
+                let response = super::super::router(state.clone())
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let after = required_session(&state, &session.code).await.unwrap();
+                assert_eq!((after.current_slide, after.reveal_step), (0, 1));
+                assert_eq!(after.follow_revision, 0);
+                assert_eq!(runtime.revision(), revision);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reveal_snapshots_use_fresh_state_without_expiring_historical_browsing() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        store::move_to_position(&state.pool, session.id, 1, 0)
+            .await
+            .unwrap();
+        let before = required_session(&state, &session.code).await.unwrap();
+        let expected_marker = SessionMarker::from(&before);
+        navigate(&state, &session.code, "next").await;
+        // A cold runtime must render the persisted step, not its initial state.
+        let cold_hub = LiveHub::default();
+        let runtime = cold_hub.runtime(&state.pool, session.id).await.unwrap();
+        let deck = runtime
+            .deck(&state.pool, session.deck_version_id)
+            .await
+            .unwrap();
+        let (following, marker, _) = snapshot(
+            &state,
+            &runtime,
+            &session.code,
+            LiveView::Audience,
+            None,
+            None,
+            expected_marker,
+        )
+        .await
+        .unwrap();
+        assert_ne!(marker, expected_marker);
+        assert_eq!(marker.reveal_step, 1);
+        assert!(following.contains(deck.document.slides[1].html_at_step(1).as_ref()));
+        let (historical, _, requested) = snapshot(
+            &state,
+            &runtime,
+            &session.code,
+            LiveView::Audience,
+            None,
+            Some(0),
+            expected_marker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(requested, Some(0));
+        assert!(historical.contains(&deck.document.slides[0].html));
+
+        navigate(&state, &session.code, "previous").await;
+        let (following, marker, _) = snapshot(
+            &state,
+            &runtime,
+            &session.code,
+            LiveView::Audience,
+            None,
+            None,
+            marker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(marker.reveal_step, 0);
+        assert!(following.contains(deck.document.slides[1].html_at_step(0).as_ref()));
+        navigate(&state, &session.code, "previous").await;
+        let (_, marker, requested) = snapshot(
+            &state,
+            &runtime,
+            &session.code,
+            LiveView::Audience,
+            None,
+            Some(0),
+            marker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(requested, None);
+        assert_eq!((marker.slide, marker.reveal_step), (0, 2));
+    }
+
+    #[tokio::test]
+    async fn events_reconcile_reveals_without_notifications() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        let response = events(
+            State(state.clone()),
+            CookieJar::new(),
+            Path(session.code.clone()),
+            Query(EventQuery {
+                view: None,
+                slide: None,
+                presenter_slide: None,
+                presenter_revision: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let mut frames = response.into_body().into_data_stream();
+        let initial = frames.next().await.unwrap().unwrap();
+        let runtime = state.hub.runtime(&state.pool, session.id).await.unwrap();
+        let revision = runtime.revision();
+        store::set_reveal_step(&state.pool, session.id, 1)
+            .await
+            .unwrap();
+        let updated = tokio::time::timeout(Duration::from_secs(3), frames.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_ne!(initial, updated);
+        assert!(
+            std::str::from_utf8(&updated)
+                .unwrap()
+                .contains("data-reveal-step=\"1\"")
+        );
+        assert_eq!(runtime.revision(), revision);
+    }
+
+    #[tokio::test]
+    async fn lagged_reveal_events_keep_historical_audience_on_their_slide() {
+        let (_directory, state, session) = test_session(REVEAL_DECK).await;
+        store::move_to_position(&state.pool, session.id, 1, 0)
+            .await
+            .unwrap();
+        let current = required_session(&state, &session.code).await.unwrap();
+        let response = events(
+            State(state.clone()),
+            CookieJar::new(),
+            Path(session.code.clone()),
+            Query(EventQuery {
+                view: None,
+                slide: Some(0),
+                presenter_slide: Some(1),
+                presenter_revision: Some(current.follow_revision),
+            }),
+        )
+        .await
+        .unwrap();
+        let mut frames = response.into_body().into_data_stream();
+        frames.next().await.unwrap().unwrap();
+        store::set_reveal_step(&state.pool, session.id, 1)
+            .await
+            .unwrap();
+        for _ in 0..256 {
+            state.hub.notify(session.id, LiveUpdate::Content).await;
+        }
+        let updated = tokio::time::timeout(Duration::from_secs(3), frames.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let updated = std::str::from_utf8(&updated).unwrap();
+        assert!(updated.contains("data-slide-index=\"0\""));
+        assert!(updated.contains("First item"));
     }
 
     #[tokio::test]
@@ -1175,9 +1479,11 @@ mod tests {
                 .contains("Historical content")
         );
 
-        mutate_position(&state, &session.code, |_, len| len - 1)
-            .await
-            .unwrap();
+        mutate_position(&state, &session.code, |_, _, document| {
+            (document.slides.len() - 1, 0)
+        })
+        .await
+        .unwrap();
         let current = store::get_session(&state.pool, session.id).await.unwrap();
         assert_eq!(current.current_slide, 1);
         let document = available_document(&state, &current, 0).await.unwrap();
@@ -1211,10 +1517,10 @@ mod tests {
         assert!(following.contains("Current content"));
 
         // Even a return to the same slide expires history via follow_revision.
-        mutate_position(&state, &session.code, |_, _| 0)
+        mutate_position(&state, &session.code, |_, _, _| (0, 0))
             .await
             .unwrap();
-        mutate_position(&state, &session.code, |_, _| 1)
+        mutate_position(&state, &session.code, |_, _, _| (1, 0))
             .await
             .unwrap();
         let (following, _, requested) = snapshot(
@@ -1317,7 +1623,7 @@ mod tests {
             .await
             .unwrap();
         let guard = runtime.mutation.lock().await;
-        let mut navigation = std::pin::pin!(mutate_position(&state, &session.code, |_, _| {
+        let mut navigation = std::pin::pin!(mutate_position(&state, &session.code, |_, _, _| {
             panic!("ended navigation must not call the update closure")
         }));
         assert!(
@@ -1337,7 +1643,7 @@ mod tests {
         );
         assert_eq!(runtime.revision(), revision);
         assert!(
-            mutate_position(&state, &session.code, |_, _| 1)
+            mutate_position(&state, &session.code, |_, _, _| (1, 0))
                 .await
                 .is_err()
         );
@@ -1365,9 +1671,11 @@ mod tests {
         let cold = start.elapsed();
         let start = std::time::Instant::now();
         for _ in 0..100 {
-            mutate_position(&state, &session.code, |current, len| (current + 1) % len)
-                .await
-                .unwrap();
+            mutate_position(&state, &session.code, |current, _, document| {
+                ((current + 1) % document.slides.len(), 0)
+            })
+            .await
+            .unwrap();
         }
         let navigation = start.elapsed();
         assert!(std::ptr::eq(

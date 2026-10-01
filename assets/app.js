@@ -4,6 +4,7 @@
   const liveWidgetIdentity = new WeakMap();
   let slideBeforeSwap = null;
   let previewSlideBeforeSwap = 0;
+  let previewStepBeforeSwap = 0;
   let pointerCard = null;
   let editorSplitPointer = null;
   let presenterNotesOpen = true;
@@ -305,7 +306,7 @@
     );
   }
 
-  function showPreviewSlide(deck, requestedIndex, updateUrl = true) {
+  function showPreviewSlide(deck, requestedIndex, requestedStep = 0, updateUrl = true) {
     const slides = [...deck.querySelectorAll("[data-preview-slide]")];
     if (slides.length === 0) return;
     const index = Math.max(0, Math.min(requestedIndex, slides.length - 1));
@@ -314,25 +315,58 @@
       slide.classList.toggle("active", active);
       slide.setAttribute("aria-current", active ? "true" : "false");
     });
+    const count = Number.parseInt(slides[index].dataset.revealCount || "0", 10);
+    const step = Math.max(0, Math.min(requestedStep, count));
+    slides[index].querySelectorAll(".slide-content [data-reveal-step]").forEach((element) => {
+      const pending = Number.parseInt(element.dataset.revealStep, 10) > step;
+      element.toggleAttribute("data-reveal-pending", pending);
+      element.toggleAttribute("inert", pending);
+      if (pending) element.setAttribute("aria-hidden", "true");
+      else element.removeAttribute("aria-hidden");
+    });
     deck.dataset.slideIndex = `${index}`;
+    deck.dataset.revealStep = `${step}`;
     const previous = deck.querySelector('[data-preview-nav="previous"]');
     const next = deck.querySelector('[data-preview-nav="next"]');
-    if (previous) previous.disabled = index === 0;
-    if (next) next.disabled = index + 1 === slides.length;
+    if (previous) previous.disabled = index === 0 && step === 0;
+    if (next) next.disabled = index + 1 === slides.length && step === count;
+    const revealPosition = deck.querySelector("[data-preview-reveal-position]");
+    if (revealPosition) {
+      revealPosition.hidden = count === 0;
+      revealPosition.textContent = count === 0 ? "" : `Step ${step} of ${count}`;
+    }
     const position = deck.querySelector("[data-preview-position]");
     if (position) position.textContent = `Slide ${index + 1} of ${slides.length}`;
     if (updateUrl) updatePreviewUrl(index);
   }
 
+  function navigatePreview(deck, action) {
+    const slides = [...deck.querySelectorAll("[data-preview-slide]")];
+    const index = Number.parseInt(deck.dataset.slideIndex || "0", 10);
+    const step = Number.parseInt(deck.dataset.revealStep || "0", 10);
+    const count = Number.parseInt(slides[index]?.dataset.revealCount || "0", 10);
+    if (action === "next") {
+      if (step < count) showPreviewSlide(deck, index, step + 1);
+      else if (index + 1 < slides.length) showPreviewSlide(deck, index + 1);
+    } else if (action === "previous") {
+      if (step > 0) showPreviewSlide(deck, index, step - 1);
+      else if (index > 0) {
+        showPreviewSlide(deck, index - 1, Number.parseInt(slides[index - 1].dataset.revealCount || "0", 10));
+      }
+    }
+  }
+
   function rememberPreviewSlide() {
     const deck = document.querySelector("[data-preview-deck]");
     previewSlideBeforeSwap = Number.parseInt(deck?.dataset.slideIndex || "0", 10);
+    previewStepBeforeSwap = Number.parseInt(deck?.dataset.revealStep || "0", 10);
   }
 
   function restorePreviewSlide() {
     const deck = document.querySelector("[data-preview-deck]");
     if (!deck) return;
-    showPreviewSlide(deck, previewIndexFromUrl() ?? previewSlideBeforeSwap);
+    const index = previewIndexFromUrl() ?? previewSlideBeforeSwap;
+    showPreviewSlide(deck, index, index === previewSlideBeforeSwap ? previewStepBeforeSwap : 0);
   }
 
   function initializeMarkdownEditor() {
@@ -563,7 +597,7 @@
     if (event.key === "ArrowLeft" || event.key === "PageUp") action = "previous";
     if (event.key === "ArrowRight" || event.key === "PageDown") action = "next";
     if (event.key === "Home") action = "first";
-    if (event.key === " " && presenter) action = "next";
+    if (event.key === " ") action = "next";
     if (!action || !activateSlideNavigation(action)) return;
     event.preventDefault();
   }
@@ -1147,7 +1181,7 @@
   window.addEventListener("hashchange", () => {
     const deck = document.querySelector("[data-preview-deck]");
     const index = previewIndexFromUrl();
-    if (deck && index !== null) showPreviewSlide(deck, index, false);
+    if (deck && index !== null) showPreviewSlide(deck, index, 0, false);
   });
 
   document.addEventListener("input", (event) => {
@@ -1208,10 +1242,7 @@
     const previewControl = event.target.closest("[data-preview-nav]");
     if (previewControl) {
       const deck = previewControl.closest("[data-preview-deck]");
-      const current = Number.parseInt(deck?.dataset.slideIndex || "0", 10);
-      if (deck) {
-        showPreviewSlide(deck, current + (previewControl.dataset.previewNav === "next" ? 1 : -1));
-      }
+      if (deck && !previewControl.disabled) navigatePreview(deck, previewControl.dataset.previewNav);
       return;
     }
     const share = event.target.closest("[data-share-url]");

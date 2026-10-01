@@ -8,13 +8,28 @@ const waitFor = async (condition, timeout = 5_000) => {
   }
 };
 const escape = (text) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
+// The Node harness handles only CDP operations; fixtures never contact an app or DB.
+const browserCommand = async (command, value) => {
+  window.browserRequest = { command, value };
+  await waitFor(() => "result" in window.browserRequest, 10_000);
+  const { result, error } = window.browserRequest;
+  window.browserRequest = null;
+  if (error) throw new Error(error);
+  return result;
+};
+const revealContent = (count, step = null) => {
+  const attributes = (number) => `data-reveal-step="${number}"${step !== null && number > step ? ' data-reveal-pending inert aria-hidden="true"' : ""}`;
+  return `${count > 0 ? `<p ${attributes(1)}>Reveal the idea: <a href="#example" style="visibility:visible">keep the layout stable</a>.</p>` : ""}${count > 1 ? `<ul><li ${attributes(2)}>Then show the details<ul><li>Nested content belongs to the same step.</li></ul></li></ul>` : ""}`;
+};
+const preview = (counts = [2, 1, 0]) => `<div id="preview"><div class="editor-preview" data-preview-deck data-presentation-theme data-slide-index="0"><div class="slide-stage">${counts.map((count, index) => `<article class="slide${index === 0 ? " active" : ""}" data-preview-slide data-reveal-count="${count}" aria-current="${index === 0}"><div class="slide-content"><h1>${["Reveal, one idea at a time", "A fresh slide starts hidden", "Ready for questions"][index]}</h1><p>Always visible. Navigate with Space or the arrow keys.</p>${revealContent(count)}<p data-after-reveals>This line stays in place as the story unfolds.</p></div></article>`).join("")}</div><nav class="preview-navigation" aria-label="Preview slide navigation"><button class="secondary" type="button" data-preview-nav="previous" disabled>Previous</button><span class="preview-position" aria-live="polite"><span data-preview-position>Slide 1 of ${counts.length}</span><span data-preview-reveal-position${counts[0] === 0 ? " hidden" : ""}>${counts[0] ? `Step 0 of ${counts[0]}` : ""}</span></span><button class="secondary" type="button" data-preview-nav="next"${counts.length === 1 && counts[0] === 0 ? " disabled" : ""}>Next</button></nav></div></div>`;
 let navigation;
-const snapshot = ({ index = 1, source = "flowchart TD\nA[Start] --> B[Finish]", code = 'fn main() { println!("hello"); }', ide = "zed://file/main.rs", count = 0, accent = "", widgets = true } = {}) =>
-  `<main id="live-view" class="presenter-shell" data-slide-index="${index}"><div id="live-error" role="alert"></div><span class="nav-position">${index + 1}/3</span><button data-color-scheme-toggle>Theme</button><div class="slide-stage"><article class="slide active"><div class="slide-content" style="${accent ? `--highlight:${accent}` : ""}">${widgets ? `<figure class="mermaid-diagram" data-mermaid-diagram><pre class="mermaid-source" data-mermaid-source><code>${escape(source)}</code></pre><div class="mermaid-output" data-mermaid-output hidden></div><p class="mermaid-error" data-mermaid-error role="status" hidden>Could not render this diagram. Check the Mermaid syntax.</p></figure><div class="rust-code" data-rust-code data-code-ide-url="${escape(ide)}"><pre><code>${escape(code)}</code></pre></div>` : "<p>No widgets</p>"}<div class="interaction-body"><span data-count>${count}</span><button aria-pressed="${count > 0}">Vote</button><span data-hands>${count}</span><ol><li>Order ${count}</li></ol></div></div></article></div>${navigation.replaceAll("{first_disabled}", index === 0 ? " disabled" : "").replaceAll("{previous_disabled}", index === 0 ? " disabled" : "").replaceAll("{next_disabled}", index === 2 ? " disabled" : "")}</main>`;
+const snapshot = ({ index = 1, step = 0, revealCount = 0, source = "flowchart TD\nA[Start] --> B[Finish]", code = 'fn main() { println!("hello"); }', ide = "zed://file/main.rs", count = 0, accent = "", widgets = true } = {}) =>
+  `<main id="live-view" class="presenter-shell" data-slide-index="${index}" data-reveal-step="${step}" data-reveal-count="${revealCount}"><div id="live-error" role="alert"></div><span class="nav-position">${index + 1}/3</span><button data-color-scheme-toggle>Theme</button><div class="slide-stage"><article class="slide active"><div class="slide-content" style="${accent ? `--highlight:${accent}` : ""}">${revealContent(revealCount, step)}${widgets ? `<figure class="mermaid-diagram" data-mermaid-diagram><pre class="mermaid-source" data-mermaid-source><code>${escape(source)}</code></pre><div class="mermaid-output" data-mermaid-output hidden></div><p class="mermaid-error" data-mermaid-error role="status" hidden>Could not render this diagram. Check the Mermaid syntax.</p></figure><div class="rust-code" data-rust-code data-code-ide-url="${escape(ide)}"><pre><code>${escape(code)}</code></pre></div>` : "<p>No widgets</p>"}<div class="interaction-body"><span data-count>${count}</span><button aria-pressed="${count > 0}">Vote</button><span data-hands>${count}</span><ol><li>Order ${count}</li></ol></div></div></article></div>${navigation.replaceAll("{first_disabled}", index === 0 && step === 0 ? " disabled" : "").replaceAll("{previous_disabled}", index === 0 && step === 0 ? " disabled" : "").replaceAll("{next_disabled}", index === 2 && step === revealCount ? " disabled" : "")}</main>`;
 
 async function fixture(options = {}) {
   const frame = document.createElement("iframe");
   frame.src = "/fixture";
+  frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0";
   const loaded = new Promise((resolve) => { frame.onload = resolve; });
   document.body.append(frame);
   await loaded;
@@ -72,26 +87,65 @@ async function fixture(options = {}) {
       reject(new w.DOMException("Test request aborted", "AbortError"));
     }, { once: true });
   });
-  d.body.insertAdjacentHTML("beforeend", snapshot(options));
+  if (options.preview) d.body.className = "";
+  d.body.insertAdjacentHTML("beforeend", options.preview ? preview(options.preview) : snapshot(options));
   await inject("/assets/htmx.min.js");
   await inject("/assets/app.js");
   d.dispatchEvent(new w.Event("DOMContentLoaded"));
-  await waitFor(() => renderCount === 1);
+  if (!options.preview) await waitFor(() => renderCount === 1);
   const api = {
     w, d, calls, errors, boundSources,
     get renderCount() { return renderCount; },
     get finishedRequests() { return finishedRequests; },
     releaseRender,
     query(selector) { return d.querySelector(selector); },
-    nav(action) { return d.querySelector(`[data-nav="${action}"]`); },
+    nav(action) { return d.querySelector(`[data-${options.preview ? "preview-" : ""}nav="${action}"]`); },
+    key(key) { d.dispatchEvent(new w.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); },
+    async replacePreview(counts) {
+      await w.htmx.swap({ target: d.querySelector("#preview"), swap: "outerHTML", text: preview(counts) });
+    },
     async morph(update = {}) {
       await w.htmx.swap({ target: d.querySelector("#live-view"), swap: "outerMorph", text: snapshot(update) });
     },
     async ready() { await waitFor(() => d.querySelector('[data-mermaid-state="ready"]')); },
     dispose() { frame.remove(); },
   };
-  if (!options.holdRender) await api.ready();
+  if (!options.preview && !options.holdRender) await api.ready();
+  await d.fonts.ready;
   return api;
+}
+
+function assertReveals(f, container, step) {
+  for (const element of container.querySelectorAll(".slide-content [data-reveal-step]")) {
+    const pending = Number(element.dataset.revealStep) > step;
+    assert(element.hasAttribute("data-reveal-pending") === pending, `Wrong pending state at step ${step}`);
+    assert(element.inert === pending, `Wrong inert state at step ${step}`);
+    assert(element.getAttribute("aria-hidden") === (pending ? "true" : null), `Wrong aria-hidden at step ${step}`);
+    for (const node of [element, ...element.querySelectorAll("*")]) {
+      assert(f.w.getComputedStyle(node).visibility === (pending ? "hidden" : "visible"), `Wrong visibility for ${node.tagName} at step ${step}`);
+    }
+    const rect = element.getBoundingClientRect();
+    assert(rect.width > 0 && rect.height > 0, "Pending content lost its geometry");
+  }
+}
+function assertPreview(f, index, step) {
+  const deck = f.query("[data-preview-deck]");
+  const slides = [...deck.querySelectorAll("[data-preview-slide]")];
+  const count = Number(slides[index].dataset.revealCount);
+  assert(Number(deck.dataset.slideIndex) === index && Number(deck.dataset.revealStep) === step, `Expected slide ${index}, step ${step}; got ${deck.dataset.slideIndex}/${deck.dataset.revealStep}`);
+  slides.forEach((slide, i) => {
+    assert(slide.classList.contains("active") === (i === index), "Wrong active slide");
+    assert(slide.getAttribute("aria-current") === String(i === index), "Wrong aria-current slide");
+  });
+  assert(f.nav("previous").disabled === (index === 0 && step === 0), "Wrong preview previous boundary");
+  assert(f.nav("next").disabled === (index === slides.length - 1 && step === count), "Wrong preview next boundary");
+  assert(f.query("[data-preview-position]").textContent === `Slide ${index + 1} of ${slides.length}`, "Stale slide label");
+  const label = f.query("[data-preview-reveal-position]");
+  assert(label.hidden === (count === 0) && label.textContent === (count ? `Step ${step} of ${count}` : ""), "Stale reveal label");
+  assertReveals(f, slides[index], step);
+  const previous = f.nav("previous").getBoundingClientRect();
+  const next = f.nav("next").getBoundingClientRect();
+  assert(Math.abs(previous.y - next.y) < 1 && next.x > previous.right, "Preview buttons must share a row");
 }
 
 export async function run() {
@@ -107,6 +161,134 @@ export async function run() {
     } catch (error) { results.push({ name, error: error.stack || String(error) }); }
     finally { f?.dispose(); }
   };
+
+  await test("preview starts at step 0; next reveals before changing slides, previous hides before returning fully revealed", async (f) => {
+    assert(f.w.innerWidth >= 1280 && f.w.innerHeight >= 720, "Fixture viewport is not presentation-sized");
+    assertPreview(f, 0, 0);
+    const rects = () => [...f.d.querySelectorAll(".active [data-reveal-step], .active [data-after-reveals]")].map((node) => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return { x, y, width, height };
+    });
+    const initial = JSON.stringify(rects());
+    const link = f.query(".active [data-reveal-step] a");
+    link.focus();
+    assert(f.d.activeElement !== link, "Pending link accepted focus");
+    f.nav("next").click();
+    assertPreview(f, 0, 1);
+    link.focus();
+    assert(f.d.activeElement === link, "Revealed link remained inert");
+    link.blur();
+    await browserCommand("screenshot", "preview-partial");
+    f.nav("next").click();
+    assertPreview(f, 0, 2);
+    assert(JSON.stringify(rects()) === initial, "Revealing content shifted layout");
+    await browserCommand("screenshot", "preview-all");
+    f.nav("next").click();
+    assertPreview(f, 1, 0);
+    f.nav("next").click();
+    assertPreview(f, 1, 1);
+    f.nav("previous").click();
+    assertPreview(f, 1, 0);
+    f.nav("previous").click();
+    assertPreview(f, 0, 2);
+    f.nav("previous").click();
+    assertPreview(f, 0, 1);
+  }, { preview: [2, 1, 0] });
+
+  await test("preview Space/arrows traverse steps and slides; Home resets both", async (f) => {
+    for (const [key, index, step] of [[" ", 0, 1], ["ArrowRight", 0, 2], ["ArrowRight", 1, 0], [" ", 1, 1], ["ArrowRight", 2, 0], ["ArrowRight", 2, 0], ["ArrowLeft", 1, 1], ["ArrowLeft", 1, 0], ["ArrowLeft", 0, 2], ["Home", 0, 0], ["ArrowLeft", 0, 0]]) {
+      f.key(key);
+      assertPreview(f, index, step);
+    }
+    assert(f.calls.length === 0, "Preview navigation issued a request");
+  }, { preview: [2, 1, 0] });
+
+  for (const count of [0, 2]) {
+    await test(`single-slide preview boundaries with ${count} reveals`, async (f) => {
+      assertPreview(f, 0, 0);
+      f.nav("previous").click();
+      assertPreview(f, 0, 0);
+      for (let step = 1; step <= count; step++) {
+        f.nav("next").click();
+        assertPreview(f, 0, step);
+      }
+      f.nav("next").click();
+      f.key(" ");
+      assertPreview(f, 0, count);
+      f.key("Home");
+      assertPreview(f, 0, 0);
+    }, { preview: [count] });
+  }
+
+  await test("editor HTMX replacement retains and clamps the current reveal step", async (f) => {
+    for (let i = 0; i < 4; i++) f.nav("next").click();
+    assertPreview(f, 1, 1);
+    const old = f.query("[data-preview-deck]");
+    await f.replacePreview([2, 2]);
+    assert(f.query("[data-preview-deck]") !== old, "Preview was not replaced");
+    assertPreview(f, 1, 1);
+    f.nav("next").click();
+    assertPreview(f, 1, 2);
+    await f.replacePreview([2, 1]);
+    assertPreview(f, 1, 1);
+    await f.replacePreview([2, 0]);
+    assertPreview(f, 1, 0);
+    await f.replacePreview([1]);
+    assertPreview(f, 0, 0);
+  }, { preview: [2, 1] });
+
+  await test("print emulation shows every slide and pending descendant without changing screen reveal state", async (f) => {
+    for (let i = 0; i < 3; i++) f.nav("next").click();
+    f.key("Home");
+    assertPreview(f, 0, 0);
+    assert(f.d.querySelectorAll("[data-reveal-pending]").length === 3, "Expected pending content on both slides");
+    try {
+      await browserCommand("media", "print");
+      assert(f.w.matchMedia("print").matches, "Print emulation not applied to fixture");
+      for (const slide of f.d.querySelectorAll("[data-preview-slide]")) {
+        assert(f.w.getComputedStyle(slide).display !== "none" && slide.getBoundingClientRect().height > 0, "Print hid a slide");
+        for (const node of slide.querySelectorAll("[data-reveal-step], [data-reveal-step] *")) {
+          assert(f.w.getComputedStyle(node).visibility === "visible" && node.getBoundingClientRect().height > 0, "Print hid reveal content");
+        }
+      }
+    } finally { await browserCommand("media", "screen"); }
+    assertPreview(f, 0, 0);
+  }, { preview: [2, 1] });
+
+  await test("live reveal attributes morph on the same slide without resetting widgets or boundary controls", async (f) => {
+    const svg = f.query("[data-mermaid-output] svg");
+    const run = f.query("[data-playground-run]");
+    run.click();
+    f.calls[0].resolve(JSON.stringify({ success: true, stdout: "retained", stderr: "" }), 200);
+    await waitFor(() => f.query('[data-playground-result][data-state="success"]'));
+    const output = f.query("[data-playground-output]");
+    for (const step of [1, 2, 1, 0]) {
+      await f.morph({ index: 0, revealCount: 2, step, count: step });
+      assertReveals(f, f.query("#live-view"), step);
+      assert(f.query("#live-view").dataset.revealStep === String(step), "Live reveal position is stale");
+      assert(f.query("[data-mermaid-output] svg") === svg && f.renderCount === 1, "Reveal rerendered Mermaid");
+      assert(f.query("[data-playground-run]") === run && f.query("[data-playground-output]") === output && output.textContent === "retained" && !output.hidden, "Reveal reset Playground");
+      assert(f.nav("first").disabled === (step === 0) && f.nav("previous").disabled === (step === 0), "First-slide reveal boundary is stale");
+    }
+    const calls = f.calls.length;
+    f.nav("first").click();
+    f.nav("previous").click();
+    f.key("ArrowLeft");
+    f.key("Home");
+    assert(f.calls.length === calls, "Disabled first/previous issued a request");
+    await f.morph({ index: 2, revealCount: 2, step: 1 });
+    await f.ready();
+    assert(!f.nav("next").disabled, "Last slide cannot finish its reveals");
+    f.nav("next").click();
+    await f.morph({ index: 2, revealCount: 2, step: 2 });
+    f.calls[calls].resolve();
+    await waitFor(() => f.finishedRequests === 1);
+    assert(f.nav("next").disabled, "Completion re-enabled next at the final reveal");
+    f.nav("next").click();
+    f.key("ArrowRight");
+    f.key(" ");
+    assert(f.calls.length === calls + 1, "Disabled next issued a request");
+  }, { index: 0, revealCount: 2 });
 
   await test("same-slide snapshots retain SVG/run output/focus while votes, hands and ordering morph", async (f) => {
     const svg = f.query("[data-mermaid-output] svg");

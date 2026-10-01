@@ -1710,6 +1710,7 @@ form.htmx-request button {
 }
 
 .preview-position {
+  display: grid;
   min-width: 6.5rem;
   color: var(--muted);
   font-size: 0.82rem;
@@ -2337,6 +2338,11 @@ pre code {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.slide-content [data-reveal-pending],
+.slide-content [data-reveal-pending] * {
+  visibility: hidden !important;
 }
 
 .nav-position {
@@ -4008,6 +4014,11 @@ pre code {
 }
 
 @media print {
+  .slide-content [data-reveal-pending],
+  .slide-content [data-reveal-pending] * {
+    visibility: visible !important;
+  }
+
   :root {
     color-scheme: light;
     --bg: #fff;

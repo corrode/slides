@@ -429,7 +429,7 @@ pub async fn active_session(pool: &SqlitePool) -> Result<Option<LiveSessionSumma
 
 pub async fn session_by_code(pool: &SqlitePool, code: &str) -> Result<Option<LiveSession>> {
     Ok(sqlx::query_as::<_, LiveSession>(
-        r#"SELECT id, deck_version_id, code, current_slide, locked,
+        r#"SELECT id, deck_version_id, code, current_slide, reveal_step, locked,
                   interaction_open, results_revealed, follow_revision, ended_at
            FROM sessions WHERE code = ?"#,
     )
@@ -440,7 +440,7 @@ pub async fn session_by_code(pool: &SqlitePool, code: &str) -> Result<Option<Liv
 
 pub async fn get_session(pool: &SqlitePool, id: i64) -> Result<LiveSession> {
     Ok(sqlx::query_as::<_, LiveSession>(
-        r#"SELECT id, deck_version_id, code, current_slide, locked,
+        r#"SELECT id, deck_version_id, code, current_slide, reveal_step, locked,
                   interaction_open, results_revealed, follow_revision, ended_at
            FROM sessions WHERE id = ?"#,
     )
@@ -485,16 +485,31 @@ pub async fn delete_ended_session(pool: &SqlitePool, session_id: i64) -> Result<
     Ok(deleted.rows_affected() > 0)
 }
 
-pub async fn move_to_slide(pool: &SqlitePool, id: i64, slide: usize) -> Result<()> {
+pub async fn move_to_position(
+    pool: &SqlitePool,
+    id: i64,
+    slide: usize,
+    reveal_step: usize,
+) -> Result<()> {
     sqlx::query(
-        r#"UPDATE sessions SET current_slide = ?, interaction_open = 1,
+        r#"UPDATE sessions SET current_slide = ?, reveal_step = ?, interaction_open = 1,
                   results_revealed = 0, follow_revision = follow_revision + 1
            WHERE id = ? AND ended_at IS NULL"#,
     )
     .bind(slide as i64)
+    .bind(reveal_step as i64)
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+pub async fn set_reveal_step(pool: &SqlitePool, id: i64, reveal_step: usize) -> Result<()> {
+    sqlx::query("UPDATE sessions SET reveal_step = ? WHERE id = ? AND ended_at IS NULL")
+        .bind(reveal_step as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -1055,6 +1070,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reveal_positions_persist_across_database_reloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", directory.path().join("reveals.db").display());
+        let pool = connect(&database_url).await.unwrap();
+        let session = start_test_session(&pool, "reveals").await;
+        assert_eq!(session.reveal_step, 0);
+        move_to_position(&pool, session.id, 1, 3).await.unwrap();
+        set_interaction_state(&pool, session.id, false, true)
+            .await
+            .unwrap();
+        set_reveal_step(&pool, session.id, 2).await.unwrap();
+        pool.close().await;
+
+        let pool = connect(&database_url).await.unwrap();
+        for loaded in [
+            get_session(&pool, session.id).await.unwrap(),
+            session_by_code(&pool, &session.code)
+                .await
+                .unwrap()
+                .unwrap(),
+        ] {
+            assert_eq!((loaded.current_slide, loaded.reveal_step), (1, 2));
+            assert!(!loaded.interaction_open);
+            assert!(loaded.results_revealed);
+            assert_eq!(loaded.follow_revision, 1);
+        }
+        assert!(
+            sqlx::query("UPDATE sessions SET reveal_step = -1 WHERE id = ?")
+                .bind(session.id)
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        assert_eq!(get_session(&pool, session.id).await.unwrap().reveal_step, 2);
+
+        move_to_position(&pool, session.id, 0, 0).await.unwrap();
+        let reset = get_session(&pool, session.id).await.unwrap();
+        assert_eq!((reset.current_slide, reset.reveal_step), (0, 0));
+        assert!(reset.interaction_open);
+        assert!(!reset.results_revealed);
+        assert_eq!(reset.follow_revision, 2);
+        end_session(&pool, session.id, now_millis()).await.unwrap();
+        move_to_position(&pool, session.id, 1, 3).await.unwrap();
+        set_reveal_step(&pool, session.id, 2).await.unwrap();
+        let ended = get_session(&pool, session.id).await.unwrap();
+        assert_eq!((ended.current_slide, ended.reveal_step), (0, 0));
+        assert_eq!(ended.follow_revision, 2);
+        pool.close().await;
+    }
+
+    #[tokio::test]
     async fn replaces_and_revokes_api_token() {
         let directory = tempfile::tempdir().unwrap();
         let database_url = format!("sqlite://{}", directory.path().join("slides.db").display());
@@ -1235,8 +1301,8 @@ mod tests {
         reset_hands(&pool, session.id).await.unwrap();
         assert_eq!(raised_hand_count(&pool, session.id).await.unwrap(), 0);
 
-        move_to_slide(&pool, session.id, 1).await.unwrap();
-        move_to_slide(&pool, session.id, 0).await.unwrap();
+        move_to_position(&pool, session.id, 1, 0).await.unwrap();
+        move_to_position(&pool, session.id, 0, 0).await.unwrap();
         assert_eq!(
             get_session(&pool, session.id)
                 .await

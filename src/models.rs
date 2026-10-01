@@ -85,6 +85,7 @@ pub struct LiveSession {
     pub deck_version_id: i64,
     pub code: String,
     pub current_slide: i64,
+    pub reveal_step: i64,
     pub locked: bool,
     pub interaction_open: bool,
     pub results_revealed: bool,

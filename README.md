@@ -4,7 +4,7 @@ A server-rendered interactive presentation app built with Rust, Axum, SQLite, an
 
 The current vertical slice supports:
 
-- Markdown decks separated by `---`, with presenter-only notes
+- Markdown decks separated by `---`, with incremental `:::reveal` blocks and presenter-only notes
 - Highlighted fenced code blocks, with sandboxed Rust execution through `play.rust-lang.org`
 - Browser-editable drafts with ZIP bundle import, preview, publish, present, and print actions, plus immutable published versions
 - Named shortlinks, six-digit session codes, and one live presentation per Slides instance
@@ -29,7 +29,7 @@ Validate a presentation without starting the server:
 cargo run -- validate examples/intro-to-rust.md
 ```
 
-The command checks the Markdown and interaction syntax, semantic interaction rules, and referenced code files. It exits unsuccessfully with a slide-specific error when validation fails.
+The command checks the Markdown and directive syntax (including reveal blocks), semantic interaction rules, and referenced code files. It exits unsuccessfully with a slide-specific error when validation fails.
 
 Configuration:
 
@@ -79,7 +79,7 @@ ZIP bundles are import packaging, not a separate deck type. Every draft is brows
 
 Each successful upload installs a new immutable asset generation and replaces the entire draft content and title, including browser edits; it does not merge changes. The deck's existing theme, published versions and their assets, and running sessions are preserved. To update imported asset files, upload a complete replacement ZIP. Publishing and starting live sessions remain presenter UI actions, not bundle upload side effects.
 
-Presenter shortcuts use `ArrowLeft` or `PageUp` for the previous slide, `ArrowRight`, `PageDown`, or `Space` for the next slide, and `Home` to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
+Presenter and editor-preview shortcuts use `ArrowLeft` or `PageUp` for Previous (hide a reveal step, then move to the previous slide fully shown), `ArrowRight`, `PageDown`, or `Space` for Next (show a reveal step, then advance), and `Home` for First (reset to the first slide at step zero). These shortcuts apply outside editable fields and interactive controls. Use the presenter's **Attention** control to call everyone back to the current slide. Audience shortcuts use `Alt+H` to raise or lower a hand and `Alt+1`, `Alt+2`, or `Alt+3` for applause, lightbulb, or question reactions.
 
 Bundle generations are retained on disk, including superseded drafts; v1 does not garbage-collect them. Deleting a presentation revokes access to its generations but does not reclaim their directories. Back up the database and `SLIDES_EMBED_DIR` together, and account for retained generations when monitoring disk usage.
 
@@ -125,7 +125,22 @@ SQLx verifies applied migrations by checksum. Once a migration has been run anyw
 
 The normative format specification and research notes are in [`docs/slide-format.md`](docs/slide-format.md). A complete, ready-to-present showcase is available at [`examples/kitchen-sink.md`](examples/kitchen-sink.md).
 
-Decks use `---` separators, CommonMark content, fenced code blocks, Mermaid diagrams, optional `:::notes` presenter notes, local `:::iframe` embeds, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+Decks use `---` separators, CommonMark content, fenced code blocks, Mermaid diagrams, optional `:::reveal` blocks and `:::notes` presenter notes, local `:::iframe` embeds, and at most one poll, quiz, word cloud, or ordering interaction per slide. Reactions and raised hands are available without authoring syntax.
+
+Reveal paragraphs or list items one step at a time:
+
+```markdown
+# Ownership
+
+:::reveal
+Each value has an owner.
+
+- Moving transfers ownership.
+- Borrowing leaves ownership unchanged.
+:::
+```
+
+Each top-level paragraph or list item is one step; nested content appears with its parent item. Multiple blocks continue the same sequence on a slide. **Next** reveals before advancing; **Previous** hides steps, then returns to the prior slide fully shown. **First** resets to the first slide with its reveals hidden. The current live audience view follows the presenter's step; historical slides, full-content rendering, print/PDF, and session archives show all steps. Keep reveals sparse, not an excuse for denser slides. See [incremental reveals](docs/slide-format.md#incremental-reveals) for supported content and validation rules.
 
 Code shipped in the bundle's `code/` directory can be included in full with an otherwise empty fence:
 
