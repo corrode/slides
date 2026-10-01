@@ -17,10 +17,11 @@ env:
   CARGO_TERM_COLOR: always
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
+# Pin the OS so runner-image migrations are deliberate.
 jobs:
   checks:
     name: Format, lint, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -43,7 +44,7 @@ jobs:
         run: cargo test --locked --all-targets
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -52,7 +53,7 @@ jobs:
           node --check assets/app.js
           node --check assets/live.js
 
-      # Temporarily skipped: Chrome times out before reporting its DevTools URL on ubuntu-latest.
+      # Temporarily skipped: Chrome times out before reporting its DevTools URL on GitHub's Ubuntu runner.
       # See https://github.com/corrode/slides/actions/runs/36874814578.
       # Re-enable once runner startup is reliable; keep both suites runnable locally.
       - name: Test live transport and navigation in Chrome
@@ -69,7 +70,7 @@ jobs:
 
   image:
     name: Build and publish container image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: checks
     permissions:
       contents: read
@@ -105,7 +106,7 @@ jobs:
 
   deploy:
     name: Deploy to Coolify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: image
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
